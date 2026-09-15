@@ -879,8 +879,7 @@ void VoicePipeline::speak(const std::string& text, const std::string& language,
     }
 }
 
-void VoicePipeline::emit_error(const std::string& message,
-                               uint64_t generation) {
+void VoicePipeline::emit_error(const std::string& message, uint64_t generation) {
     if (!is_current_turn(generation)) return;
 
     PipelineEvent error;

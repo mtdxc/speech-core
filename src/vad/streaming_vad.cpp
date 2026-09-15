@@ -6,14 +6,14 @@ StreamingVAD::StreamingVAD(VADConfig config, float chunk_duration)
     : config_(config), chunk_duration_(chunk_duration) {}
 
 std::vector<VADEvent> StreamingVAD::process(float probability) {
-    float time = static_cast<float>(chunk_count_) * chunk_duration_;
+    float time = current_time();
     chunk_count_++;
     return process_prob(probability, time);
 }
 
 std::vector<VADEvent> StreamingVAD::flush() {
     std::vector<VADEvent> events;
-    float end_time = static_cast<float>(chunk_count_) * chunk_duration_;
+    float end_time = current_time();
 
     switch (state_) {
     case State::Silence:

@@ -33,16 +33,13 @@ ParsedUrl split_host_port(const std::string& base_url) {
     constexpr size_t kPrefixLen = 7;
     if (base_url.size() < kPrefixLen ||
         base_url.compare(0, kPrefixLen, kPrefix) != 0) {
-        throw std::invalid_argument(
-            "OllamaLLM: base_url must start with http:// (got '" +
-            base_url + "')");
+        throw std::invalid_argument("OllamaLLM: base_url must start with http:// (got '" + base_url + "')");
     }
     std::string rest = base_url.substr(kPrefixLen);
     // Strip trailing slash if present (consistent with documented format).
     while (!rest.empty() && rest.back() == '/') rest.pop_back();
     if (rest.empty()) {
-        throw std::invalid_argument(
-            "OllamaLLM: base_url is empty after scheme");
+        throw std::invalid_argument("OllamaLLM: base_url is empty after scheme");
     }
     auto colon = rest.find(':');
     ParsedUrl out;
@@ -55,17 +52,14 @@ ParsedUrl split_host_port(const std::string& base_url) {
         try {
             out.port = std::stoi(rest.substr(colon + 1));
         } catch (const std::exception&) {
-            throw std::invalid_argument(
-                "OllamaLLM: invalid port in base_url '" + base_url + "'");
+            throw std::invalid_argument("OllamaLLM: invalid port in base_url '" + base_url + "'");
         }
         if (out.port <= 0 || out.port > 65535) {
-            throw std::invalid_argument(
-                "OllamaLLM: port out of range in base_url '" + base_url + "'");
+            throw std::invalid_argument("OllamaLLM: port out of range in base_url '" + base_url + "'");
         }
     }
     if (out.host.empty()) {
-        throw std::invalid_argument(
-            "OllamaLLM: empty host in base_url '" + base_url + "'");
+        throw std::invalid_argument("OllamaLLM: empty host in base_url '" + base_url + "'");
     }
     return out;
 }
@@ -140,7 +134,13 @@ struct OllamaLLM::Impl {
     std::mutex client_mu;                    // guards active_client
     std::atomic<bool> cancelled{false};
     httplib::Client* active_client = nullptr;  // raw, owned by chat()'s stack
-
+    bool checkCancel() const {
+        if (cancelled.load(std::memory_order_acquire)) {
+            if (on_token) on_token("", true);
+            return true;
+        }
+        return false;
+    }
     // Per-stream parser state (reset at the top of chat()).
     std::string      line_buffer;
     LLMResponse      response;
@@ -160,15 +160,15 @@ struct OllamaLLM::Impl {
     void feed_bytes(const char* data, size_t len) {
         line_buffer.append(data, len);
         size_t pos = 0;
-        while (true) {
+        while (!stream_failed) {
+            // split lines
             size_t nl = line_buffer.find('\n', pos);
             if (nl == std::string::npos) break;
             std::string line = line_buffer.substr(pos, nl - pos);
             pos = nl + 1;
             // Strip a single trailing CR for CRLF servers.
             if (!line.empty() && line.back() == '\r') line.pop_back();
-            if (!line.empty()) handle_line(line);
-            if (stream_failed) break;
+            if (!line.empty()) handle_line(line); // parse json line
         }
         line_buffer.erase(0, pos);
     }
@@ -182,42 +182,46 @@ struct OllamaLLM::Impl {
             stream_error = std::string("bad json: ") + ex.what();
             return;
         }
-        if (j.contains("error")) {
+        auto it = j.find("error");
+        if (it != j.end()) {
             stream_failed = true;
-            if (j["error"].is_string()) {
-                stream_error = j["error"].get<std::string>();
+            if (it->is_string()) {
+                stream_error = it->get<std::string>();
             } else {
-                stream_error = j["error"].dump();
+                stream_error = it->dump();
             }
             return;
         }
-        if (!j.contains("message")) return;
-        const auto& msg = j["message"];
-
-        if (msg.contains("content") && msg["content"].is_string()) {
-            const std::string& delta = msg["content"].get_ref<const std::string&>();
+        it = j.find("message");
+        if (it == j.end()) return;
+        const auto& msg = *it;
+        auto itc = msg.find("content");
+        if (itc != msg.end() && itc->is_string()) {
+            const std::string& delta = itc->get_ref<const std::string&>();
             if (!delta.empty()) {
                 response.text += delta;
                 if (on_token) on_token(delta, false);
             }
         }
-        if (msg.contains("tool_calls") && msg["tool_calls"].is_array()) {
-            for (const auto& tc : msg["tool_calls"]) {
+        auto itt = msg.find("tool_calls");
+        if (itt != msg.end() && itt->is_array()) {
+            for (const auto& tc : *itt) {
                 if (!tc.contains("function")) continue;
                 const auto& fn = tc["function"];
                 ToolCall call;
                 if (fn.contains("name") && fn["name"].is_string()) {
                     call.name = fn["name"].get<std::string>();
                 }
-                if (fn.contains("arguments")) {
+                auto itn = fn.find("arguments");
+                if (itn != fn.end()) {
                     // Ollama returns arguments as a JSON object. Our
                     // ToolCall.arguments is a string per LLMInterface, so
                     // re-serialise. If a server happens to send a string
                     // (older versions), preserve it as-is.
-                    if (fn["arguments"].is_string()) {
-                        call.arguments = fn["arguments"].get<std::string>();
+                    if (itn->is_string()) {
+                        call.arguments = itn->get<std::string>();
                     } else {
-                        call.arguments = fn["arguments"].dump();
+                        call.arguments = itn->dump();
                     }
                 }
                 response.tool_calls.push_back(std::move(call));
@@ -277,8 +281,7 @@ LLMResponse OllamaLLM::chat(
     // request.
     {
         std::lock_guard<std::mutex> lk(impl_->client_mu);
-        if (impl_->cancelled.load(std::memory_order_acquire)) {
-            if (impl_->on_token) impl_->on_token("", true);
+        if (impl_->checkCancel()) {
             return impl_->response;
         }
         impl_->active_client = &cli;
@@ -301,8 +304,7 @@ LLMResponse OllamaLLM::chat(
     // Cancellation path — return the partial response we accumulated and
     // signal the caller via on_token(is_final=true). The pipeline's
     // interruption logic expects to see the terminal callback.
-    if (impl_->cancelled.load(std::memory_order_acquire)) {
-        if (impl_->on_token) impl_->on_token("", true);
+    if (impl_->checkCancel()) {
         return impl_->response;
     }
 
@@ -311,18 +313,13 @@ LLMResponse OllamaLLM::chat(
     // which makes httplib mark the Result as Canceled. We must surface the
     // upstream parse error, not the downstream transport effect.
     if (impl_->stream_failed) {
-        throw std::runtime_error(
-            "OllamaLLM: stream parse error: " + impl_->stream_error);
+        throw std::runtime_error("OllamaLLM: stream parse error: " + impl_->stream_error);
     }
     if (!res) {
-        throw std::runtime_error(
-            "OllamaLLM: HTTP transport failed: " +
-            httplib::to_string(res.error()));
+        throw std::runtime_error("OllamaLLM: HTTP transport failed: " + httplib::to_string(res.error()));
     }
     if (res->status != 200) {
-        throw std::runtime_error(
-            "OllamaLLM: HTTP " + std::to_string(res->status) +
-            ": " + res->body);
+        throw std::runtime_error("OllamaLLM: HTTP " + std::to_string(res->status) + ": " + res->body);
     }
 
     // Flush any trailing line without newline (some servers don't emit a
@@ -331,9 +328,7 @@ LLMResponse OllamaLLM::chat(
         impl_->handle_line(impl_->line_buffer);
         impl_->line_buffer.clear();
         if (impl_->stream_failed) {
-            throw std::runtime_error(
-                "OllamaLLM: stream parse error (trailing): " +
-                impl_->stream_error);
+            throw std::runtime_error("OllamaLLM: stream parse error (trailing): " + impl_->stream_error);
         }
     }
 

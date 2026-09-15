@@ -7,7 +7,13 @@
 #include <csignal>
 #include <cstring>
 #include <string>
+#ifdef _WIN32
+#include <windows.h>
+void sleep(int ms){ Sleep(ms); }
+#else
 #include <unistd.h>
+void sleep(int ms){ usleep(ms * 1000); }
+#endif
 
 #ifdef HAS_ALSA
 #include <alsa/asoundlib.h>
@@ -131,8 +137,7 @@ int main(int argc, char* argv[]) {
         size_t n = fread(buffer, sizeof(float), 512, stdin);
         if (n == 0) break;
         speech_push_audio(pipeline, buffer, n);
-        // Simulate real-time pace
-        usleep((unsigned int)(n * 1000000 / 16000));
+        sleep(n * 1000 / 16000);
     }
 #endif
 
