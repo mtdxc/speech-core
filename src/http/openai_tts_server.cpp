@@ -122,6 +122,19 @@ void append_u32(std::vector<uint8_t>& out, uint32_t value) {
     out.push_back(static_cast<uint8_t>((value >> 24u) & 0xFFu));
 }
 
+uint16_t read_u16(const std::string& bytes, size_t offset) {
+    return static_cast<uint16_t>(
+        static_cast<unsigned char>(bytes[offset]) |
+        (static_cast<uint16_t>(static_cast<unsigned char>(bytes[offset + 1])) << 8u));
+}
+
+uint32_t read_u32(const std::string& bytes, size_t offset) {
+    return static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset])) |
+        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 1])) << 8u) |
+        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 2])) << 16u) |
+        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 3])) << 24u);
+}
+
 void set_json(httplib::Response& response, int status, const nlohmann::json& body) {
     response.status = status;
     response.set_header("Cache-Control", "no-store");
@@ -188,10 +201,11 @@ OpenAITtsRequest parse_request(const std::string& body) {
     }
 
     const auto required_string = [&payload](const char* field) {
-        if (!payload.contains(field) || !payload[field].is_string()) {
+        auto it = payload.find(field);
+        if ( it == payload.end() || !it->is_string()) {
             throw InvalidSpeechRequest(std::string("Missing '") + field + "' field");
         }
-        std::string value = payload[field].get<std::string>();
+        std::string value = it->get<std::string>();
         if (trim_ascii(value).empty()) {
             throw InvalidSpeechRequest(std::string("Missing '") + field + "' field");
         }
@@ -234,79 +248,65 @@ OpenAITtsRequest parse_request(const std::string& body) {
             "The 'input' field must not exceed " +
             std::to_string(kMaximumInputCharacters) + " characters");
     }
-
-    if (payload.contains("response_format")) {
-        if (!payload["response_format"].is_string()) {
+    auto it = payload.find("response_format");
+    if (it != payload.end()) {
+        if (!it->is_string()) {
             throw InvalidSpeechRequest("Invalid JSON request body");
         }
-        const std::string format = ascii_lower(
-            trim_ascii(payload["response_format"].get<std::string>()));
+        const std::string format = ascii_lower(trim_ascii(it->get<std::string>()));
         if (format == "wav") {
             request.response_format = AudioResponseFormat::Wav;
         } else if (format == "pcm") {
             request.response_format = AudioResponseFormat::Pcm;
         } else {
-            throw InvalidSpeechRequest(
-                "Unsupported response format '" + format + "'; use 'wav' or 'pcm'");
+            throw InvalidSpeechRequest("Unsupported response format '" + format + "'; use 'wav' or 'pcm'");
         }
     }
 
-    if (payload.contains("speed")) {
-        if (!payload["speed"].is_number()) {
+    it = payload.find("speed");
+    if (it != payload.end()) {
+        if (!it->is_number()) {
             throw InvalidSpeechRequest("Invalid JSON request body");
         }
-        const double speed = payload["speed"].get<double>();
+        const float speed = it->get<float>();
         if (!std::isfinite(speed) || speed < 0.25 || speed > 4.0) {
             throw InvalidSpeechRequest(
                 "Speed " + std::to_string(speed) +
                 " is outside the supported range 0.25...4.0");
         }
-        request.speed = static_cast<float>(speed);
+        request.speed = speed;
     }
 
-    if (payload.contains("language")) {
-        if (!payload["language"].is_string()) {
+    it = payload.find("language");
+    if (it != payload.end()) {
+        if (!it->is_string()) {
             throw InvalidSpeechRequest("Invalid JSON request body");
         }
-        request.language = map_language(payload["language"].get<std::string>());
+        request.language = map_language(it->get<std::string>());
     }
 
-    if (payload.contains("instructions")) {
-        if (!payload["instructions"].is_string()) {
+    it = payload.find("instructions");
+    if (it != payload.end()) {
+        if (!it->is_string()) {
             throw InvalidSpeechRequest("Invalid JSON request body");
         }
-        if (!trim_ascii(payload["instructions"].get<std::string>()).empty()) {
+        if (!trim_ascii(it->get<std::string>()).empty()) {
             throw InvalidSpeechRequest(
                 "The 'instructions' field is not supported by the local Kokoro model");
         }
     }
 
-    if (payload.contains("stream_format")) {
-        if (!payload["stream_format"].is_string()) {
+    it = payload.find("stream_format");
+    if (it != payload.end()) {
+        if (!it->is_string()) {
             throw InvalidSpeechRequest("Invalid JSON request body");
         }
-        const std::string stream_format = ascii_lower(
-            trim_ascii(payload["stream_format"].get<std::string>()));
+        const std::string stream_format = ascii_lower(trim_ascii(it->get<std::string>()));
         if (stream_format != "audio") {
-            throw InvalidSpeechRequest(
-                "Unsupported stream format '" + stream_format +
-                "'; use 'audio'");
+            throw InvalidSpeechRequest("Unsupported stream format '" + stream_format + "'; use 'audio'");
         }
     }
     return request;
-}
-
-uint16_t read_u16(const std::string& bytes, size_t offset) {
-    return static_cast<uint16_t>(
-        static_cast<unsigned char>(bytes[offset]) |
-        (static_cast<uint16_t>(static_cast<unsigned char>(bytes[offset + 1])) << 8u));
-}
-
-uint32_t read_u32(const std::string& bytes, size_t offset) {
-    return static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset])) |
-        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 1])) << 8u) |
-        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 2])) << 16u) |
-        (static_cast<uint32_t>(static_cast<unsigned char>(bytes[offset + 3])) << 24u);
 }
 
 std::vector<float> decode_wav_to_mono_16k(const std::string& bytes) {
@@ -460,8 +460,7 @@ std::string single_form_field(const httplib::Request& request,
         throw InvalidSpeechRequest(std::string("Missing '") + name + "' field");
     }
     if (value.size() > maximum_bytes) {
-        throw InvalidSpeechRequest(
-            std::string("The '") + name + "' field is too long");
+        throw InvalidSpeechRequest(std::string("The '") + name + "' field is too long");
     }
     return value;
 }
@@ -469,8 +468,7 @@ std::string single_form_field(const httplib::Request& request,
 OpenAITranscriptionRequest parse_transcription_request(
     const httplib::Request& request) {
     if (!request.is_multipart_form_data()) {
-        throw InvalidSpeechRequest(
-            "The transcription endpoint requires multipart/form-data");
+        throw InvalidSpeechRequest("The transcription endpoint requires multipart/form-data");
     }
     if (request.form.get_file_count("file") == 0u) {
         throw InvalidSpeechRequest("Missing 'file' field");
@@ -493,16 +491,13 @@ OpenAITranscriptionRequest parse_transcription_request(
     if (parsed.filename.size() > kMaximumFilenameBytes) {
         throw InvalidSpeechRequest("The uploaded filename is too long");
     }
-    parsed.language = single_form_field(
-        request, "language", false, kMaximumLanguageBytes);
-    parsed.prompt = single_form_field(
-        request, "prompt", false, kMaximumInputCharacters * 4u);
+    parsed.language = single_form_field(request, "language", false, kMaximumLanguageBytes);
+    parsed.prompt = single_form_field(request, "prompt", false, kMaximumInputCharacters * 4u);
     if (utf8_character_count(parsed.prompt) > kMaximumInputCharacters) {
         throw InvalidSpeechRequest("The 'prompt' field must not exceed 4096 characters");
     }
 
-    parsed.response_format = ascii_lower(single_form_field(
-        request, "response_format", false, 32u));
+    parsed.response_format = ascii_lower(single_form_field(request, "response_format", false, 32u));
     if (parsed.response_format.empty()) parsed.response_format = "json";
     static const std::unordered_set<std::string> formats = {
         "json", "text", "verbose_json", "srt", "vtt"};
@@ -512,8 +507,7 @@ OpenAITranscriptionRequest parse_transcription_request(
             "'; use 'json', 'text', 'verbose_json', 'srt', or 'vtt'");
     }
 
-    const std::string temperature = single_form_field(
-        request, "temperature", false, 32u);
+    const std::string temperature = single_form_field(request, "temperature", false, 32u);
     if (!temperature.empty()) {
         size_t consumed = 0;
         double value = 0.0;
@@ -524,8 +518,7 @@ OpenAITranscriptionRequest parse_transcription_request(
         }
         if (consumed != temperature.size() || !std::isfinite(value) ||
             value < 0.0 || value > 1.0) {
-            throw InvalidSpeechRequest(
-                "The 'temperature' field must be between 0 and 1");
+            throw InvalidSpeechRequest("The 'temperature' field must be between 0 and 1");
         }
         parsed.temperature = static_cast<float>(value);
     }
@@ -666,8 +659,7 @@ void register_openai_tts_routes(
 
             try {
                 if (http_request.body.size() > kMaximumTtsRequestBytes) {
-                    set_openai_error(
-                        response, 413, "The request body must not exceed 1 MiB");
+                    set_openai_error(response, 413, "The request body must not exceed 1 MiB");
                     return;
                 }
                 const OpenAITtsRequest request = parse_request(http_request.body);

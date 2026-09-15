@@ -1,4 +1,4 @@
-#include "speech_core/pipeline/meeting_transcription_track.h"
+﻿#include "speech_core/pipeline/meeting_transcription_track.h"
 
 // CI configures Release and RelWithDebInfo, both of which define NDEBUG, so
 // every assertion below would otherwise compile away and the file would pass

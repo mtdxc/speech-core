@@ -17,6 +17,8 @@ option(SPEECH_CORE_WITH_OLLAMA "Build the speech_core_llm_ollama target — Olla
 option(SPEECH_CORE_PACKAGE "Add install rules for CLI/server tools and bundled runtimes, then configure CPack (Linux .deb/.tar.gz or Windows .zip)." OFF)
 set(SPEECH_CORE_PACKAGE_VERSION "${PROJECT_VERSION}" CACHE STRING "Version stamped into binary packages. The release workflow passes the git tag (e.g. 0.0.8); local builds default to the project version.")
 
+set(ORT_DIR "E:\\Google\\v124\\sdk\\qkids\\onnxruntime")
+
 if(SPEECH_CORE_WITH_HF_DOWNLOAD AND NOT SPEECH_CORE_WITH_LITERT)
     message(FATAL_ERROR "SPEECH_CORE_WITH_HF_DOWNLOAD=ON requires SPEECH_CORE_WITH_LITERT=ON "
                         "(the download feature fetches the LiteRT VoxCPM2 bundle).")
@@ -1017,7 +1019,7 @@ if(SPEECH_CORE_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
         if(MSVC)
             target_compile_definitions(test_ollama_llm PRIVATE
-                _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0601)
+                _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0A00)
         endif()
         if(WIN32)
             target_link_libraries(test_ollama_llm PRIVATE ws2_32)
@@ -1040,7 +1042,7 @@ if(SPEECH_CORE_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
         if(MSVC)
             target_compile_definitions(test_pipeline_ollama_e2e PRIVATE
-                _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0601)
+                _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0A00)
         endif()
         if(WIN32)
             target_link_libraries(test_pipeline_ollama_e2e PRIVATE ws2_32)
@@ -1099,7 +1101,7 @@ if(SPEECH_CORE_BUILD_TESTS)
             endif()
             if(MSVC)
                 target_compile_definitions(test_fdb_bench_smoke PRIVATE
-                    _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0601)
+                    _USE_MATH_DEFINES NOMINMAX _WIN32_WINNT=0x0A00)
             endif()
             if(WIN32)
                 target_link_libraries(test_fdb_bench_smoke PRIVATE ws2_32)
