@@ -1,9 +1,11 @@
 #pragma once
 
+#include "speech_core/audio/mel.h"
 #include "speech_core/interfaces.h"
 #include "speech_core/models/litert_engine.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -32,9 +34,12 @@ namespace speech_core {
 /// Differs from the older LiteRTNemotronStreamingStt: 320 ms windows (32 mel
 /// frames, 4 emitted encoder frames decoded per chunk), a one-hot
 /// language_mask input (caller selects the prompt slot via set_language), and
-/// a 13 087-token vocab. The continuous whole-utterance mel (pre-emphasis 0.97,
-/// Slaney, log-floor 2^-24) is sliced into fixed windows. One instance == one
-/// stream. Not thread-safe.
+/// a 13 087-token vocab. The utterance's mel (pre-emphasis 0.97, Slaney,
+/// log-floor 2^-24) is sliced into fixed windows; it is computed as audio
+/// arrives, equal to the whole-utterance mel frame for frame, so a window
+/// costs the same however long the stream has run. Each token records the
+/// encoder frame it was emitted on, and results carry words timed from
+/// those frames. One instance == one stream. Not thread-safe.
 ///
 /// Runtime note: the channelwise-INT8 encoder needs an Android NNAPI/XNNPACK
 /// delegate; the FP16 encoder runs on the plain CPU interpreter.
@@ -59,6 +64,7 @@ public:
         int   vocab_size        = 13087; // refined from vocab.json
         int   blank_id          = 13087; // = vocab_size
         int   max_symbols       = 10;
+        int   subsampling       = 8;     // mel frames per encoder frame (config.json subsamplingFactor)
     };
 
     LiteRTNemotronMultilingualStt(const std::string& encoder_path,
@@ -97,7 +103,14 @@ private:
     bool load_vocab(const std::string& path);
     bool load_languages(const std::string& path);
     void reset_stream_state();
-    std::vector<float> compute_mel(const float* audio, size_t length) const;
+    /// Reads what turns an emission frame into time from the bundle's
+    /// config.json: the encoder's subsampling of mel frames.
+    void load_bundle_config(const std::string& path);
+    audio::StreamingMelSpectrogram::Config mel_config() const;
+    /// Decodes the next mel_frames pending frames as one window.
+    std::string run_pending_window();
+    /// Audio one encoder output frame covers, in seconds.
+    float frame_seconds() const;
     std::string run_window(const float* mel_window);  // encoder + greedy RNN-T
     std::string token_to_text(int id) const;
     int chunk_samples() const { return cfg_.mel_frames * cfg_.hop_length; }
@@ -136,8 +149,10 @@ private:
     int auto_slot_ = -1;
 
     // ---- per-stream state ----
-    std::vector<float> stream_audio_;
-    size_t             decoded_windows_ = 0;
+    std::unique_ptr<audio::StreamingMelSpectrogram> mel_stream_;  // features as audio arrives
+    std::vector<float> pending_frames_;      // mel frames not yet decoded, [frames x bins]
+    size_t             samples_pushed_ = 0;  // audio samples of the current stream
+    size_t             decoded_windows_ = 0; // windows already decoded
     std::vector<float> pre_cache_;
     std::vector<float> cache_last_channel_;
     std::vector<float> cache_last_time_;
@@ -145,6 +160,8 @@ private:
     std::vector<float> dec_h_, dec_c_;
     int64_t            last_token_ = 0;
     std::string        accumulated_text_;
+    std::vector<TimedWord> stream_words_;    // words of the current stream, timed
+    int64_t            encoder_frames_ = 0;  // encoder output frames decoded so far
     bool               stream_init_ = false;
 };
 

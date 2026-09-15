@@ -44,4 +44,63 @@ std::vector<float> mel_spectrogram(
     bool center_pad_zeros = false,
     bool symmetric_torch_window = false);
 
+/// Incremental form of mel_spectrogram(center=true) in its legacy layout, for
+/// audio that arrives in pieces: optional pre-emphasis, reflect-centred frames
+/// of win_length samples under a symmetric Hann window, the same filterbank and
+/// log floor.
+///
+/// A frame is produced as soon as every sample it reads has arrived, and not
+/// before, so it never reads the right-edge padding a whole-buffer call adds at
+/// the end of its input. It is then the same arithmetic over the same samples
+/// as the whole-buffer frame of the same index, for any buffer holding them.
+/// Only the samples a later frame still reads are kept, so a frame costs the
+/// same however long the stream has run.
+///
+/// The left edge is reflected as mel_spectrogram does, which needs n_fft/2 + 1
+/// samples before the first frame. Not thread-safe.
+class StreamingMelSpectrogram {
+public:
+    struct Config {
+        int sample_rate = 16000;
+        int n_fft = 512;
+        int hop_length = 160;
+        int win_length = 400;
+        int num_mel_bins = 128;
+        bool slaney_norm = false;
+        float log_floor = 1e-10f;
+        /// y[n] = x[n] - k * x[n-1], passing the stream's first sample through;
+        /// the one-sample memory carries across pushes. 0 disables it.
+        float pre_emphasis = 0.0f;
+    };
+
+    explicit StreamingMelSpectrogram(const Config& config);
+
+    /// Forget the stream; the next sample pushed is sample 0 again.
+    void reset();
+
+    /// Append `length` samples. Each frame they complete is appended to
+    /// `frames` in time order as `num_mel_bins` values — frame-major
+    /// [frames x bins], unlike mel_spectrogram's channels-first result.
+    /// Returns how many frames were appended.
+    size_t push(const float* samples, size_t length, std::vector<float>& frames);
+
+    size_t samples_pushed() const { return samples_pushed_; }
+    size_t frames_produced() const { return next_frame_; }
+    /// Samples held for frames still to come.
+    size_t buffered_samples() const { return buffer_.size(); }
+
+private:
+    Config config_;
+    std::vector<float> filterbank_;
+    std::vector<float> window_;
+    std::vector<float> frame_;
+    std::vector<float> spec_re_;
+    std::vector<float> spec_im_;
+    std::vector<float> buffer_;  // pre-emphasised samples from buffer_start_
+    size_t buffer_start_ = 0;
+    size_t samples_pushed_ = 0;
+    size_t next_frame_ = 0;
+    float previous_sample_ = 0.0f;
+};
+
 }  // namespace speech_core::audio

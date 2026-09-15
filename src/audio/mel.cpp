@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <stdexcept>
 #include <vector>
 
 namespace speech_core::audio {
@@ -115,6 +117,39 @@ static std::vector<float> mel_filterbank(
     return fb;
 }
 
+static std::vector<float> hann_window(int win_length, bool periodic) {
+    std::vector<float> window(win_length);
+    const float denom = static_cast<float>(
+        periodic ? win_length : win_length - 1);
+    for (int i = 0; i < win_length; i++) {
+        window[i] = 0.5f * (1.0f - std::cos(2.0f * kPi
+                    * static_cast<float>(i) / denom));
+    }
+    return window;
+}
+
+// Power spectrum -> mel -> log of one windowed n_fft frame, written to
+// out[m * stride] for each mel bin m. Shared by the whole-buffer and the
+// streaming paths so a frame is the same arithmetic in both.
+static void log_mel_frame(
+    const float* frame, int n_fft, const std::vector<float>& fb,
+    int num_mel_bins, float log_floor,
+    std::vector<float>& spec_re, std::vector<float>& spec_im,
+    float* out, size_t stride)
+{
+    const int num_bins = n_fft / 2 + 1;
+    fft_real(frame, n_fft, spec_re.data(), spec_im.data());
+    for (int m = 0; m < num_mel_bins; m++) {
+        float sum = 0.0f;
+        for (int f = 0; f < num_bins; f++) {
+            float power = spec_re[f] * spec_re[f]
+                        + spec_im[f] * spec_im[f];
+            sum += power * fb[m * num_bins + f];
+        }
+        out[static_cast<size_t>(m) * stride] = std::log(sum + log_floor);
+    }
+}
+
 std::vector<float> mel_spectrogram(
     const float* audio, size_t length,
     int sample_rate, int n_fft, int hop_length,
@@ -168,14 +203,8 @@ std::vector<float> mel_spectrogram(
     // the legacy symmetric form (N-1) stays for the LiteRT-validated paths,
     // and symmetric_torch_window selects it under the torch layout too
     // (torch.hann_window(periodic=False) — the Parakeet extractor).
-    std::vector<float> window(win_length);
     const bool periodic = torch_stft_layout && !symmetric_torch_window;
-    const float denom = static_cast<float>(
-        periodic ? win_length : win_length - 1);
-    for (int i = 0; i < win_length; i++) {
-        window[i] = 0.5f * (1.0f - std::cos(2.0f * kPi
-                    * static_cast<float>(i) / denom));
-    }
+    const std::vector<float> window = hann_window(win_length, periodic);
     // torch.stft centres a shorter window inside the n_fft frame.
     const int win_offset = torch_stft_layout ? (n_fft - win_length) / 2 : 0;
 
@@ -190,22 +219,102 @@ std::vector<float> mel_spectrogram(
         for (int i = 0; i < win_length; i++) {
             frame[win_offset + i] = sig[t * hop_length + win_offset + i] * window[i];
         }
-
-        fft_real(frame.data(), n_fft, spec_re.data(), spec_im.data());
-
-        // Power spectrum → mel → log
-        for (int m = 0; m < num_mel_bins; m++) {
-            float sum = 0.0f;
-            for (int f = 0; f < num_bins; f++) {
-                float power = spec_re[f] * spec_re[f]
-                            + spec_im[f] * spec_im[f];
-                sum += power * fb[m * num_bins + f];
-            }
-            mel[m * num_frames + t] = std::log(sum + log_floor);
-        }
+        log_mel_frame(frame.data(), n_fft, fb, num_mel_bins, log_floor,
+                      spec_re, spec_im, mel.data() + t,
+                      static_cast<size_t>(num_frames));
     }
 
     return mel;
+}
+
+// ---------------------------------------------------------------------------
+// StreamingMelSpectrogram
+// ---------------------------------------------------------------------------
+
+StreamingMelSpectrogram::StreamingMelSpectrogram(const Config& config)
+    : config_(config)
+{
+    if (config.n_fft <= 0 || config.hop_length <= 0 || config.win_length <= 0
+        || config.win_length > config.n_fft || config.num_mel_bins <= 0
+        || config.sample_rate <= 0) {
+        throw std::invalid_argument("StreamingMelSpectrogram: invalid geometry");
+    }
+    filterbank_ = mel_filterbank(
+        config.num_mel_bins, config.n_fft, config.sample_rate, config.slaney_norm);
+    window_ = hann_window(config.win_length, /*periodic=*/false);
+    frame_.assign(static_cast<size_t>(config.n_fft), 0.0f);
+    spec_re_.assign(static_cast<size_t>(config.n_fft / 2 + 1), 0.0f);
+    spec_im_.assign(static_cast<size_t>(config.n_fft / 2 + 1), 0.0f);
+}
+
+void StreamingMelSpectrogram::reset() {
+    buffer_.clear();
+    buffer_start_ = 0;
+    samples_pushed_ = 0;
+    next_frame_ = 0;
+    previous_sample_ = 0.0f;
+}
+
+size_t StreamingMelSpectrogram::push(
+    const float* samples, size_t length, std::vector<float>& frames)
+{
+    if (samples == nullptr || length == 0) return 0;
+
+    buffer_.reserve(buffer_.size() + length);
+    for (size_t i = 0; i < length; ++i) {
+        const float x = samples[i];
+        if (config_.pre_emphasis == 0.0f || samples_pushed_ + i == 0) {
+            buffer_.push_back(x);
+        } else {
+            buffer_.push_back(x - config_.pre_emphasis * previous_sample_);
+        }
+        previous_sample_ = x;
+    }
+    samples_pushed_ += length;
+
+    const std::int64_t pad = config_.n_fft / 2;
+    const std::int64_t pushed = static_cast<std::int64_t>(samples_pushed_);
+    const std::int64_t base = static_cast<std::int64_t>(buffer_start_);
+    size_t produced = 0;
+    for (;;) {
+        // Stream index under the frame's first window tap, in the padded
+        // coordinates mel_spectrogram uses: frame t starts t*hop - n_fft/2.
+        const std::int64_t origin =
+            static_cast<std::int64_t>(next_frame_) * config_.hop_length - pad;
+        if (origin + config_.win_length > pushed) break;
+        // Left of the stream mel_spectrogram reflects, padded[pad-1-k] =
+        // x[k+1], which reads up to index -origin.
+        if (origin < 0 && -origin >= pushed) break;
+
+        std::fill(frame_.begin(), frame_.end(), 0.0f);
+        for (int i = 0; i < config_.win_length; ++i) {
+            const std::int64_t index = origin + i;
+            const std::int64_t source = index < 0 ? -index : index;
+            frame_[static_cast<size_t>(i)] =
+                buffer_[static_cast<size_t>(source - base)]
+                * window_[static_cast<size_t>(i)];
+        }
+        const size_t at = frames.size();
+        frames.resize(at + static_cast<size_t>(config_.num_mel_bins));
+        log_mel_frame(frame_.data(), config_.n_fft, filterbank_,
+                      config_.num_mel_bins, config_.log_floor,
+                      spec_re_, spec_im_, frames.data() + at, 1);
+        ++next_frame_;
+        ++produced;
+    }
+
+    // Keep what the next frame reads: from its first tap, or from the start
+    // while the reflected head is still needed. Trimming only past n_fft of
+    // slack keeps a push from shifting the buffer every time.
+    const std::int64_t next_origin =
+        static_cast<std::int64_t>(next_frame_) * config_.hop_length - pad;
+    const std::int64_t keep_from = std::max<std::int64_t>(0, next_origin);
+    if (keep_from - base > config_.n_fft) {
+        buffer_.erase(buffer_.begin(),
+                      buffer_.begin() + static_cast<std::ptrdiff_t>(keep_from - base));
+        buffer_start_ = static_cast<size_t>(keep_from);
+    }
+    return produced;
 }
 
 }  // namespace speech_core::audio

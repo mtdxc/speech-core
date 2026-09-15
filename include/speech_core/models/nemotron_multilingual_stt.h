@@ -1,5 +1,6 @@
 #pragma once
 
+#include "speech_core/audio/mel.h"
 #include "speech_core/interfaces.h"
 
 #include <onnxruntime_c_api.h>
@@ -35,11 +36,14 @@ namespace speech_core {
 /// thread-safe; the copy constructor gives a second stream over the same
 /// weights, and those two may be driven from different threads.
 ///
-/// Mirrors the reference validator export/onnx_inference.py: whole-utterance
+/// Mirrors the reference validator export/onnx_inference.py: the utterance's
 /// mel sliced into fixed 320 ms windows (pre-emphasis 0.97, Slaney mel,
 /// log-floor 2^-24, NeMo normalize=NA — i.e. no per-feature normalization),
 /// greedy RNN-T over every emitted encoder frame, encoder caches carried
-/// across windows.
+/// across windows. The mel is computed as audio arrives, equal to the
+/// whole-utterance mel frame for frame, so a window costs the same however
+/// long the stream has run. Each token records the encoder frame it was
+/// emitted on, and results carry words timed from those frames.
 class NemotronMultilingualStt : public STTInterface {
 public:
     struct Config {
@@ -61,6 +65,7 @@ public:
         int   vocab_size        = 13087; // refined from vocab.json
         int   blank_id          = 13087; // = vocab_size
         int   max_symbols       = 10;    // expansions per encoder frame
+        int   subsampling       = 8;     // mel frames per encoder frame (config.json subsamplingFactor)
     };
 
     NemotronMultilingualStt(const std::string& encoder_path,
@@ -119,10 +124,14 @@ private:
     void reset_stream_state();
     void query_io_names();
 
-    /// Compute the continuous log-mel of `audio` (pre-emphasis + Slaney + log
-    /// floor, channels-first [bins, frames]). Matches compute_mel_chunk() in
-    /// the reference validator.
-    std::vector<float> compute_mel(const float* audio, size_t length) const;
+    /// Reads what turns an emission frame into time from the bundle's
+    /// config.json: the encoder's subsampling of mel frames.
+    void load_bundle_config(const std::string& path);
+    audio::StreamingMelSpectrogram::Config mel_config() const;
+    /// Decodes the next mel_frames pending frames as one window.
+    std::string run_pending_window();
+    /// Audio one encoder output frame covers, in seconds.
+    float frame_seconds() const;
 
     /// Run one 320 ms window: encoder (cache-aware) -> greedy RNN-T over every
     /// emitted encoder frame. `mel_window` is [mel_bins * mel_frames]
@@ -160,8 +169,10 @@ private:
     std::vector<std::string> jnt_in_, jnt_out_;
 
     // ---- per-stream state ----
-    std::vector<float> stream_audio_;        // all PCM for the current utterance
-    size_t             decoded_windows_ = 0; // windows already run from stream_audio_
+    std::unique_ptr<audio::StreamingMelSpectrogram> mel_stream_;  // features as audio arrives
+    std::vector<float> pending_frames_;      // mel frames not yet decoded, [frames x bins]
+    size_t             samples_pushed_ = 0;  // audio samples of the current stream
+    size_t             decoded_windows_ = 0; // windows already decoded
     std::vector<float> pre_cache_;           // [1, bins, pre_cache_size]
     std::vector<float> cache_last_channel_;  // [L, 1, attn, H]
     std::vector<float> cache_last_time_;     // [L, 1, H, conv]
@@ -169,6 +180,8 @@ private:
     std::vector<float> dec_h_, dec_c_;       // [L, 1, Hd]
     int64_t            last_token_ = 0;      // primed to blank in reset
     std::string        accumulated_text_;
+    std::vector<TimedWord> stream_words_;    // words of the current stream, timed
+    int64_t            encoder_frames_ = 0;  // encoder output frames decoded so far
     bool               stream_init_ = false;
 };
 
