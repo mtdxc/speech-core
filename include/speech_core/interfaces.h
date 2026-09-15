@@ -28,12 +28,24 @@ struct Message {
 // STT — Speech-to-Text
 // ---------------------------------------------------------------------------
 
+/// One word of a transcription and when it was spoken, for backends that
+/// can tell. Times are seconds from the start of the stream or buffer.
+/// `text` keeps the separator its decoder emitted before it (a SentencePiece
+/// word start renders as a leading space), so a result's words
+/// concatenated reproduce its text.
+struct TimedWord {
+    std::string text;
+    float start_time = 0.0f;
+    float end_time = 0.0f;
+};
+
 struct TranscriptionResult {
     std::string text;
     std::string language;  // detected language (e.g. "russian", "english"), empty if unknown
     float confidence = 1.0f;
     float start_time = 0.0f;  // seconds
     float end_time = 0.0f;
+    std::vector<TimedWord> words;  // empty unless the backend times words
 };
 
 /// Partial transcription result from streaming STT.
@@ -41,6 +53,9 @@ struct PartialResult {
     std::string text;
     std::string language;
     float confidence = 0.0f;
+    /// Every word of the open stream so far, not only this chunk's; empty
+    /// unless the backend times words.
+    std::vector<TimedWord> words;
 };
 
 /// One paragraph-local segment emitted by a joint transcription/diarization

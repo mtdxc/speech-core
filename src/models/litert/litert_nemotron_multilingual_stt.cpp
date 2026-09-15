@@ -1,14 +1,22 @@
 #include "speech_core/models/litert_nemotron_multilingual_stt.h"
 
 #include "speech_core/audio/mel.h"
+#include "speech_core/transcription/timed_words.h"
 #include "speech_core/util/json.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 
 namespace speech_core {
+
+// The directory a bundle file sits in, which holds the bundle's config.json.
+static std::string bundle_directory(const std::string& file) {
+    const auto slash = file.find_last_of("/\\");
+    return slash == std::string::npos ? std::string(".") : file.substr(0, slash);
+}
 
 LiteRTNemotronMultilingualStt::LiteRTNemotronMultilingualStt(
     const std::string& encoder_path, const std::string& decoder_path,
@@ -30,6 +38,7 @@ LiteRTNemotronMultilingualStt::LiteRTNemotronMultilingualStt(
 
     load_vocab(vocab_path);
     load_languages(languages_path);
+    load_bundle_config(bundle_directory(vocab_path) + "/config.json");
     query_litert_io_order();
 
     LOGI("Nemotron multilingual (LiteRT): vocab=%zu prompts=%d enc_hidden=%d "
@@ -107,6 +116,21 @@ bool LiteRTNemotronMultilingualStt::load_languages(const std::string& path) {
     return !lang2slot_.empty();
 }
 
+// The bundle's config.json says how many mel frames one encoder output frame
+// covers, which turns the frame a token was emitted on into a time. Absent or
+// unreadable leaves the published export's value.
+void LiteRTNemotronMultilingualStt::load_bundle_config(const std::string& path) {
+    auto text = json::read_file(path);
+    if (text.empty()) return;
+    auto top = json::parse_flat_object(text);
+    if (auto it = top.find("subsamplingFactor"); it != top.end()) {
+        try {
+            const int value = std::stoi(it->second);
+            if (value > 0) cfg_.subsampling = value;
+        } catch (...) {}
+    }
+}
+
 bool LiteRTNemotronMultilingualStt::set_language(const std::string& locale) {
     auto it = lang2slot_.find(locale);
     if (it != lang2slot_.end()) { lang_slot_ = it->second; return true; }
@@ -126,20 +150,43 @@ std::string LiteRTNemotronMultilingualStt::token_to_text(int id) const {
     return piece;
 }
 
-std::vector<float> LiteRTNemotronMultilingualStt::compute_mel(
-    const float* audio, size_t length) const
-{
-    if (length == 0) return {};
-    std::vector<float> emph(length);
-    emph[0] = audio[0];
-    for (size_t i = 1; i < length; ++i) {
-        emph[i] = audio[i] - cfg_.pre_emphasis * audio[i - 1];
+audio::StreamingMelSpectrogram::Config LiteRTNemotronMultilingualStt::mel_config() const {
+    audio::StreamingMelSpectrogram::Config mel;
+    mel.sample_rate = cfg_.sample_rate;
+    mel.n_fft = cfg_.n_fft;
+    mel.hop_length = cfg_.hop_length;
+    mel.win_length = cfg_.win_length;
+    mel.num_mel_bins = cfg_.mel_bins;
+    mel.slaney_norm = true;
+    mel.log_floor = 1.0f / static_cast<float>(1 << 24);  // 2^-24
+    mel.pre_emphasis = cfg_.pre_emphasis;
+    return mel;
+}
+
+float LiteRTNemotronMultilingualStt::frame_seconds() const {
+    return static_cast<float>(cfg_.hop_length * cfg_.subsampling)
+         / static_cast<float>(cfg_.sample_rate);
+}
+
+std::string LiteRTNemotronMultilingualStt::run_pending_window() {
+    const size_t bins = static_cast<size_t>(cfg_.mel_bins);
+    const size_t frames = static_cast<size_t>(cfg_.mel_frames);
+    // Pending frames are [frame, bin]; the encoder takes [bin, frame]. A frame
+    // the stream has not produced stays zero, as the whole-buffer front-end
+    // left it.
+    std::vector<float> window(bins * frames, 0.0f);
+    const size_t available = std::min(frames, pending_frames_.size() / bins);
+    for (size_t f = 0; f < available; ++f) {
+        for (size_t b = 0; b < bins; ++b) {
+            window[b * frames + f] = pending_frames_[f * bins + b];
+        }
     }
-    constexpr float kLogFloor = 1.0f / static_cast<float>(1 << 24);  // 2^-24
-    return audio::mel_spectrogram(
-        emph.data(), emph.size(), cfg_.sample_rate,
-        cfg_.n_fft, cfg_.hop_length, cfg_.win_length, cfg_.mel_bins,
-        /*slaney=*/true, kLogFloor, /*center=*/true);
+    pending_frames_.erase(
+        pending_frames_.begin(),
+        pending_frames_.begin() + static_cast<std::ptrdiff_t>(available * bins));
+    std::string text = run_window(window.data());
+    ++decoded_windows_;
+    return text;
 }
 
 // Parse the trailing integer after `token` in a tflite tensor name, e.g.
@@ -332,13 +379,17 @@ std::string LiteRTNemotronMultilingualStt::run_window(const float* mel_window) {
             }
             if (best == cfg_.blank_id) break;
 
-            emitted += token_to_text(best);
+            const std::string piece = token_to_text(best);
+            emitted += piece;
+            transcription::append_sentencepiece_token(
+                stream_words_, piece, encoder_frames_ + t, frame_seconds());
             last_token_ = best;
             out_h.read(dec_h_.data(), dec_h_.size() * sizeof(float));
             out_c.read(dec_c_.data(), dec_c_.size() * sizeof(float));
         }
     }
 
+    encoder_frames_ += enc_len;
     accumulated_text_ += emitted;
     return emitted;
 }
@@ -348,7 +399,9 @@ std::string LiteRTNemotronMultilingualStt::run_window(const float* mel_window) {
 // ---------------------------------------------------------------------------
 
 void LiteRTNemotronMultilingualStt::reset_stream_state() {
-    stream_audio_.clear();
+    mel_stream_ = std::make_unique<audio::StreamingMelSpectrogram>(mel_config());
+    pending_frames_.clear();
+    samples_pushed_ = 0;
     decoded_windows_ = 0;
     pre_cache_.assign(static_cast<size_t>(cfg_.mel_bins) * cfg_.pre_cache_size, 0.0f);
     cache_last_channel_.assign(
@@ -360,6 +413,8 @@ void LiteRTNemotronMultilingualStt::reset_stream_state() {
     dec_c_.assign(static_cast<size_t>(cfg_.decoder_layers) * cfg_.decoder_hidden, 0.0f);
     last_token_ = cfg_.blank_id;
     accumulated_text_.clear();
+    stream_words_.clear();
+    encoder_frames_ = 0;
 }
 
 void LiteRTNemotronMultilingualStt::begin_stream(int sample_rate) {
@@ -368,66 +423,71 @@ void LiteRTNemotronMultilingualStt::begin_stream(int sample_rate) {
     stream_init_ = true;
 }
 
+// Features are computed as audio arrives, and a window is decoded once its
+// 320 ms and n_fft/2 samples of right context are in — the moment the
+// whole-buffer front-end decoded it, so partial text appears exactly when it
+// used to. Every frame of that window lies inside the audio by then, so it
+// equals the frame the whole-utterance mel produced.
 PartialResult LiteRTNemotronMultilingualStt::push_chunk(const float* audio, size_t length) {
     if (!stream_init_) begin_stream(cfg_.sample_rate);
-    stream_audio_.insert(stream_audio_.end(), audio, audio + length);
+    if (audio != nullptr && length > 0) {
+        mel_stream_->push(audio, length, pending_frames_);
+        samples_pushed_ += length;
+    }
 
-    const size_t win_samples = static_cast<size_t>(chunk_samples());
-    const size_t right_ctx   = static_cast<size_t>(cfg_.n_fft) / 2;
+    const size_t win_samples   = static_cast<size_t>(chunk_samples());
+    const size_t right_ctx     = static_cast<size_t>(cfg_.n_fft) / 2;
+    const size_t window_values = static_cast<size_t>(cfg_.mel_bins) * cfg_.mel_frames;
 
     std::string text;
-    while (stream_audio_.size() >= (decoded_windows_ + 1) * win_samples + right_ctx) {
-        auto mel = compute_mel(stream_audio_.data(), stream_audio_.size());
-        const int produced = static_cast<int>(mel.size()) / cfg_.mel_bins;
-        const int f0 = static_cast<int>(decoded_windows_) * cfg_.mel_frames;
-        if (f0 + cfg_.mel_frames > produced) break;
-        std::vector<float> window(static_cast<size_t>(cfg_.mel_bins) * cfg_.mel_frames);
-        for (int b = 0; b < cfg_.mel_bins; ++b) {
-            std::copy_n(&mel[static_cast<size_t>(b) * produced + f0], cfg_.mel_frames,
-                        &window[static_cast<size_t>(b) * cfg_.mel_frames]);
-        }
-        text += run_window(window.data());
-        ++decoded_windows_;
+    while (samples_pushed_ >= (decoded_windows_ + 1) * win_samples + right_ctx
+           && pending_frames_.size() >= window_values) {
+        text += run_pending_window();
     }
 
     PartialResult out;
     out.text = std::move(text);
+    out.words = stream_words_;
     return out;
 }
 
-void LiteRTNemotronMultilingualStt::flush_stream() {}
+void LiteRTNemotronMultilingualStt::flush_stream() {
+    // No-op: trailing audio is flushed at end_stream().
+}
 
 TranscriptionResult LiteRTNemotronMultilingualStt::end_stream() {
-    if (stream_init_ && !stream_audio_.empty()) {
+    const float duration = static_cast<float>(samples_pushed_)
+                         / static_cast<float>(cfg_.sample_rate);
+    // Decode the remaining tail: pad to a whole number of windows (reflecting
+    // the reference, which zero-pads the utterance to a chunk multiple). The
+    // padding continues the feature stream, so the tail's frames are those of
+    // the padded utterance.
+    if (stream_init_ && samples_pushed_ > 0) {
         const size_t win_samples = static_cast<size_t>(chunk_samples());
-        size_t total_windows = (stream_audio_.size() + win_samples - 1) / win_samples;
-        if (stream_audio_.size() % win_samples != 0) {
-            stream_audio_.resize(total_windows * win_samples, 0.0f);
+        const size_t total_windows = (samples_pushed_ + win_samples - 1) / win_samples;
+        const size_t padding = total_windows * win_samples - samples_pushed_;
+        if (padding > 0) {
+            const std::vector<float> zeros(padding, 0.0f);
+            mel_stream_->push(zeros.data(), zeros.size(), pending_frames_);
         }
-        auto mel = compute_mel(stream_audio_.data(), stream_audio_.size());
-        const int produced = static_cast<int>(mel.size()) / cfg_.mel_bins;
         while (decoded_windows_ < total_windows) {
-            const int f0 = static_cast<int>(decoded_windows_) * cfg_.mel_frames;
-            std::vector<float> window(static_cast<size_t>(cfg_.mel_bins) * cfg_.mel_frames, 0.0f);
-            const int avail = std::min(cfg_.mel_frames, std::max(0, produced - f0));
-            for (int b = 0; b < cfg_.mel_bins; ++b) {
-                if (avail > 0)
-                    std::copy_n(&mel[static_cast<size_t>(b) * produced + f0], avail,
-                                &window[static_cast<size_t>(b) * cfg_.mel_frames]);
-            }
-            run_window(window.data());
-            ++decoded_windows_;
+            run_pending_window();
         }
     }
     TranscriptionResult out;
     out.text = accumulated_text_;
+    out.words = transcription::clamp_word_times(stream_words_, duration);
     stream_init_ = false;
     return out;
 }
 
 void LiteRTNemotronMultilingualStt::cancel_stream() {
-    stream_audio_.clear();
+    if (mel_stream_) mel_stream_->reset();
+    pending_frames_.clear();
+    samples_pushed_ = 0;
     accumulated_text_.clear();
+    stream_words_.clear();
+    encoder_frames_ = 0;
     decoded_windows_ = 0;
     stream_init_ = false;
 }

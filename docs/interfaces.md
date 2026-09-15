@@ -52,7 +52,7 @@ public:
 };
 ```
 
-`TranscriptionResult` carries `text`, `language` (ISO 639-1 code, empty if not detected), `confidence`, and `start_time` / `end_time`. `PartialResult` is the streaming counterpart — same fields minus timestamps.
+`TranscriptionResult` carries `text`, `language` (ISO 639-1 code, empty if not detected), `confidence`, `start_time` / `end_time`, and `words` — `TimedWord{text, start_time, end_time}` for backends that time words, empty otherwise. `PartialResult` is the streaming counterpart — the same fields minus `start_time` / `end_time`, with `words` covering the whole open stream. The Nemotron multilingual wrappers time each word from the encoder frames its tokens were emitted on; a word keeps its leading space, so the words concatenate to the text.
 
 **Reference implementation:** `ParakeetStt` (Parakeet TDT v3 via ONNX Runtime).
 
