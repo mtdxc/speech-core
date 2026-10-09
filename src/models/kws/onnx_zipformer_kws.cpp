@@ -198,16 +198,18 @@ public:
             for (const auto& spec : encoder_inputs) names.push_back(spec.name);
             for (const auto& state : states) values.push_back(state.get());
             auto outputs = run(encoder.get(), names, values, encoder_outputs);
-            auto encoded = floats(outputs[0].get(), static_cast<size_t>(frames * dim));
+            const size_t frame_size = static_cast<size_t>(dim);
+            auto encoded = floats(outputs[0].get(), static_cast<size_t>(frames) * frame_size);
             for (size_t i = 1; i + 1 < outputs.size(); ++i)
                 floats(outputs[i].get(), element_count(encoder_outputs[i].shape));
             states.clear();
             for (size_t i = 1; i < outputs.size(); ++i) states.push_back(std::move(outputs[i]));
-            for (int frame = 0; frame < frames; ++frame) {
-                auto hits = search->step(std::vector<float>(encoded.begin() + frame * dim, encoded.begin() + (frame + 1) * dim));
+            for (size_t frame = 0; frame < static_cast<size_t>(frames); ++frame) {
+                const auto start = encoded.begin() + frame * frame_size;
+                auto hits = search->step(std::vector<float>(start, start + frame_size));
                 for (auto& hit : hits) { hit.audio_end_seconds = samples / 16000.0; detections.push_back(std::move(hit)); }
             }
-            mel.erase(mel.begin(), mel.begin() + chunk * 2 * 80);
+            mel.erase(mel.begin(), mel.begin() + static_cast<size_t>(chunk) * 2 * 80);
         }
         return detections;
     }

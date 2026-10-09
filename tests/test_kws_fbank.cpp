@@ -14,7 +14,8 @@ int main() {
     int32_t rows = 0, bins = 0;
     reference_file.read(reinterpret_cast<char*>(&rows), 4); reference_file.read(reinterpret_cast<char*>(&bins), 4);
     check(rows == 100 && bins == 80, "KWS reference dimensions changed");
-    std::vector<float> reference(rows * bins); reference_file.read(reinterpret_cast<char*>(reference.data()), reference.size() * sizeof(float));
+    std::vector<float> reference(static_cast<size_t>(rows) * static_cast<size_t>(bins));
+    reference_file.read(reinterpret_cast<char*>(reference.data()), reference.size() * sizeof(float));
     speech_core::audio::KwsFbank whole, streaming;
     auto actual = whole.push(pcm.data(), pcm.size());
     auto tail = whole.finish(); actual.insert(actual.end(), tail.begin(), tail.end());
