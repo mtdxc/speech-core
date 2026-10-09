@@ -1,11 +1,9 @@
-#include "wav_io.h"
+#include "speech_core/audio/wav_io.h"
 
 #include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <vector>
-
-namespace fdb_bench {
 
 namespace {
 
@@ -122,6 +120,22 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
     return true;
 }
 
+bool write_wav_mono_pcm16(const std::string& path, const WavData& data) {
+    return write_wav_mono_pcm16(path, data.samples.data(), data.samples.size(), data.sample_rate);
+}
+
+bool write_wav_mono_pcm16(const std::string& path, const std::vector<float>& data, int sample_rate) {
+    return write_wav_mono_pcm16(path, data.data(), data.size(), sample_rate);
+}
+
+bool WavData::load(const std::string& path) {
+    return load_wav_mono_pcm16(path, this);
+}
+
+bool WavData::save(const std::string& path) const {
+    return write_wav_mono_pcm16(path, *this);
+}
+
 bool write_wav_mono_pcm16(const std::string& path,
                           const float* samples, size_t count,
                           int sample_rate)
@@ -165,5 +179,3 @@ bool write_wav_mono_pcm16(const std::string& path,
 
     return static_cast<bool>(os);
 }
-
-}  // namespace fdb_bench

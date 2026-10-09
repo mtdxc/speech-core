@@ -1,4 +1,5 @@
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 #include "speech_core/models/onnx_nemotron_streaming_stt.h"
 #include "speech_core/models/onnx_pocket_tts.h"
 
@@ -227,47 +228,6 @@ Result score(TestCase test,
     return result;
 }
 
-void write_u16(std::FILE* stream, std::uint16_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_u32(std::FILE* stream, std::uint32_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff),
-        static_cast<unsigned char>((value >> 16) & 0xff),
-        static_cast<unsigned char>((value >> 24) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_wav(const std::filesystem::path& path,
-               const std::vector<float>& samples) {
-    std::FILE* stream = std::fopen(path.string().c_str(), "wb");
-    if (!stream) throw std::runtime_error("Cannot write WAV: " + path.string());
-    const auto bytes = static_cast<std::uint32_t>(samples.size() * sizeof(std::int16_t));
-    std::fwrite("RIFF", 1, 4, stream);
-    write_u32(stream, 36 + bytes);
-    std::fwrite("WAVEfmt ", 1, 8, stream);
-    write_u32(stream, 16);
-    write_u16(stream, 1);
-    write_u16(stream, 1);
-    write_u32(stream, 24000);
-    write_u32(stream, 48000);
-    write_u16(stream, 2);
-    write_u16(stream, 16);
-    std::fwrite("data", 1, 4, stream);
-    write_u32(stream, bytes);
-    for (const float sample : samples) {
-        const float clipped = std::max(-1.0f, std::min(1.0f, sample));
-        const auto value = static_cast<std::int16_t>(std::lrint(clipped * 32767.0f));
-        write_u16(stream, static_cast<std::uint16_t>(value));
-    }
-    std::fclose(stream);
-}
-
 std::string json_escape(const std::string& value) {
     std::string result;
     for (const unsigned char byte : value) {
@@ -468,8 +428,8 @@ int main(int argc, char** argv) {
                  !result.tts.stopped_on_eos ||
                  normalize(result.transcript).empty())) {
                 char name[64];
-                std::snprintf(name, sizeof(name), "case_%02zu.wav", index + 1);
-                write_wav(std::filesystem::path(failed_wav_dir) / name, audio_24k);
+                std::snprintf(name, sizeof(name), "/case_%02zu.wav", index + 1);
+                write_wav_mono_pcm16(failed_wav_dir + name, audio_24k, 24000);
             }
             results.push_back(std::move(result));
             std::fflush(stdout);

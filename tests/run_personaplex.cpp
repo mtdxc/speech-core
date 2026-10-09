@@ -9,6 +9,7 @@
 
 #include "speech_core/models/onnx_personaplex.h"
 #include "speech_core/models/parakeet_stt.h"
+#include "speech_core/audio/wav_io.h"
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -31,32 +32,6 @@ bool file_exists(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
     if (f) { std::fclose(f); return true; }
     return false;
-}
-
-// Minimal mono PCM16 WAV writer. Used to dump the agent audio so we can
-// (a) listen to verify the model is producing speech-like signal and
-// (b) feed it through Parakeet STT for the roundtrip transcription gate.
-bool write_wav_mono_pcm16(const std::string& path,
-                          const std::vector<float>& samples,
-                          int sample_rate) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f) return false;
-    const uint32_t n = static_cast<uint32_t>(samples.size());
-    const uint32_t byte_rate = sample_rate * 2;
-    const uint32_t data_bytes = n * 2;
-    const uint32_t riff_size = 36 + data_bytes;
-    auto w32 = [&](uint32_t v){ f.write(reinterpret_cast<char*>(&v), 4); };
-    auto w16 = [&](uint16_t v){ f.write(reinterpret_cast<char*>(&v), 2); };
-    f.write("RIFF", 4); w32(riff_size); f.write("WAVE", 4);
-    f.write("fmt ", 4); w32(16); w16(1); w16(1);
-    w32(static_cast<uint32_t>(sample_rate)); w32(byte_rate); w16(2); w16(16);
-    f.write("data", 4); w32(data_bytes);
-    for (float s : samples) {
-        if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
-        int16_t pcm = static_cast<int16_t>(s * 32767.0f);
-        w16(static_cast<uint16_t>(pcm));
-    }
-    return f.good();
 }
 
 // Resample naive linear (for src->16k Parakeet input). Good enough for

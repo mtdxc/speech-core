@@ -12,6 +12,7 @@
 // wall time and RTF. Skips cleanly when models/fixture are missing.
 
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 #include "speech_core/models/litert_nemotron_streaming_stt.h"
 #include "speech_core/models/litert_omnilingual_stt.h"
 #include "speech_core/models/litert_parakeet_stt.h"
@@ -54,44 +55,6 @@ std::string env_model_dir() {
     return e ? e : "";
 }
 
-struct WavData { std::vector<float> samples; int sample_rate = 0; };
-WavData load_wav_mono_pcm16(const std::string& path) {
-    WavData out;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return out;
-    char riff[4], wave[4];
-    uint32_t file_size; (void)file_size;
-    f.read(riff, 4); f.read(reinterpret_cast<char*>(&file_size), 4); f.read(wave, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0) return out;
-    char chunk_id[4]; uint32_t chunk_size;
-    uint16_t audio_format = 0, num_channels = 0, bits = 0; uint32_t rate = 0;
-    bool have_fmt = false;
-    while (f.read(chunk_id, 4)) {
-        f.read(reinterpret_cast<char*>(&chunk_size), 4);
-        if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
-            f.read(reinterpret_cast<char*>(&audio_format), 2);
-            f.read(reinterpret_cast<char*>(&num_channels), 2);
-            f.read(reinterpret_cast<char*>(&rate), 4);
-            f.seekg(6, std::ios::cur);
-            f.read(reinterpret_cast<char*>(&bits), 2);
-            if (chunk_size > 16) f.seekg(chunk_size - 16, std::ios::cur);
-            have_fmt = true;
-        } else if (std::memcmp(chunk_id, "data", 4) == 0) {
-            if (!have_fmt || audio_format != 1 || num_channels != 1 || bits != 16) return out;
-            size_t n = chunk_size / 2;
-            std::vector<int16_t> pcm(n);
-            f.read(reinterpret_cast<char*>(pcm.data()), chunk_size);
-            out.samples.resize(n);
-            for (size_t i = 0; i < n; ++i) out.samples[i] = static_cast<float>(pcm[i]) / 32768.0f;
-            out.sample_rate = static_cast<int>(rate);
-            break;
-        } else {
-            f.seekg(chunk_size, std::ios::cur);
-        }
-    }
-    return out;
-}
-
 std::string test_audio_path() {
 #ifdef SPEECH_CORE_TEST_DATA_DIR
     return std::string(SPEECH_CORE_TEST_DATA_DIR) + "/test_audio.wav";
@@ -117,7 +80,8 @@ static_assert(classic_rtf(2000.0, 4.0) == 0.5,
               "RTF must be wall seconds divided by audio seconds");
 
 std::vector<float> load_audio_16k() {
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty()) return {};
     if (wav.sample_rate == 16000) return wav.samples;
     return speech_core::Resampler::resample(wav.samples.data(), wav.samples.size(),
@@ -326,7 +290,9 @@ void bench_omnilingual(const std::string& dir, int warmup, int runs) {
 // ---------------------------------------------------------------------------
 
 WavData read_wav(const std::string& path) {
-    return load_wav_mono_pcm16(path);
+    WavData wav;
+    load_wav_mono_pcm16(path, &wav);
+    return wav;
 }
 
 int run_corpus(const std::string& dir, const std::string& backend,
@@ -418,7 +384,8 @@ int corpus_nemotron(const std::string& dir, const std::string& manifest_path) {
         size_t c2 = line.find(',', c1 + 1); if (c2 == std::string::npos) continue;
         std::string uid = line.substr(0, c1);
         std::string wav_path = line.substr(c1 + 1, c2 - c1 - 1);
-        auto wav = load_wav_mono_pcm16(wav_path);
+        WavData wav;
+        load_wav_mono_pcm16(wav_path, &wav);
         if (wav.samples.empty()) { std::fprintf(stderr, "skip %s\n", uid.c_str()); continue; }
         auto a16k = wav.sample_rate == 16000
             ? wav.samples

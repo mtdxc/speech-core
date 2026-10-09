@@ -1,4 +1,5 @@
 #include "speech_core/models/onnx_pocket_tts.h"
+#include "speech_core/audio/wav_io.h"
 
 #include <algorithm>
 #include <chrono>
@@ -77,46 +78,6 @@ Run generate(speech_core::OnnxPocketTts& tts,
     return result;
 }
 
-void write_u16(std::FILE* stream, std::uint16_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_u32(std::FILE* stream, std::uint32_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff),
-        static_cast<unsigned char>((value >> 16) & 0xff),
-        static_cast<unsigned char>((value >> 24) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_wav(const std::string& path, const std::vector<float>& samples) {
-    std::FILE* stream = std::fopen(path.c_str(), "wb");
-    if (!stream) throw std::runtime_error("Cannot open WAV output: " + path);
-    const auto data_bytes = static_cast<std::uint32_t>(samples.size() * sizeof(std::int16_t));
-    std::fwrite("RIFF", 1, 4, stream);
-    write_u32(stream, 36 + data_bytes);
-    std::fwrite("WAVEfmt ", 1, 8, stream);
-    write_u32(stream, 16);
-    write_u16(stream, 1);
-    write_u16(stream, 1);
-    write_u32(stream, 24000);
-    write_u32(stream, 24000 * sizeof(std::int16_t));
-    write_u16(stream, sizeof(std::int16_t));
-    write_u16(stream, 16);
-    std::fwrite("data", 1, 4, stream);
-    write_u32(stream, data_bytes);
-    for (const float value : samples) {
-        const float clipped = std::max(-1.0f, std::min(1.0f, value));
-        const auto pcm = static_cast<std::int16_t>(std::lrint(clipped * 32767.0f));
-        write_u16(stream, static_cast<std::uint16_t>(pcm));
-    }
-    std::fclose(stream);
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -169,7 +130,7 @@ int main(int argc, char** argv) {
         const auto& last = runs.back();
         const long rss_kib = read_status_kib("VmRSS:");
         const long peak_kib = read_status_kib("VmHWM:");
-        if (!output_wav.empty()) write_wav(output_wav, captured_audio);
+        if (!output_wav.empty()) write_wav_mono_pcm16(output_wav, captured_audio, 24000);
         std::printf("Pocket TTS speech-core interleaved benchmark\n");
         std::printf("text=\"%s\" threads=%d steps=%d warmup=%d runs=%d\n",
                     text.c_str(), threads, steps, warmup, run_count);

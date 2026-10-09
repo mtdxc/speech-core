@@ -8,7 +8,7 @@
 // Ollama server.
 
 #include "fdb_corpus.h"
-#include "wav_io.h"
+#include "speech_core/audio/wav_io.h"
 
 #include "speech_core/audio/pcm_codec.h"
 #include "speech_core/audio/resampler.h"
@@ -301,8 +301,8 @@ SampleResult process_one_sample(
 {
     SampleResult r;
 
-    fdb_bench::WavData wav;
-    if (!fdb_bench::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+    WavData wav;
+    if (!load_wav_mono_pcm16(s.input_wav_path, &wav)) {
         r.error = "load_wav_mono_pcm16 failed: " + s.input_wav_path;
         return r;
     }
@@ -420,8 +420,7 @@ SampleResult process_one_sample(
     fs::create_directories(out_dir);
     std::string wav_out = out_dir + "/" + s.category_dir_name +
                           "__" + s.sample_id + ".wav";
-    fdb_bench::write_wav_mono_pcm16(wav_out, float_audio.data(),
-                                    float_audio.size(), out_rate);
+    write_wav_mono_pcm16(wav_out, float_audio, out_rate);
 
     r.output_sample_rate = out_rate;
     r.output_duration_sec = out_rate > 0
@@ -556,12 +555,10 @@ int main(int argc, char** argv) {
         // Reload input WAV briefly just for duration recording. The
         // process_one_sample call below loads it again — small cost, keeps
         // the helper's signature minimal.
-        fdb_bench::WavData wav;
+        WavData wav;
         double in_dur = 0.0;
-        if (fdb_bench::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
-            in_dur = wav.sample_rate > 0
-                ? static_cast<double>(wav.samples.size()) / wav.sample_rate
-                : 0.0;
+        if (load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+            in_dur = wav.duration();
         }
 
         SampleResult r;

@@ -20,11 +20,14 @@
 #include <string>
 #include <vector>
 
-namespace fdb_bench {
-
 struct WavData {
     std::vector<float> samples;
     int sample_rate = 0;
+    float duration() const {
+      return sample_rate > 0 ? samples.size() * 1.0f / sample_rate : 0.0f;
+    }
+    bool load(const std::string& path);
+    bool save(const std::string& path) const;
 };
 
 // Returns true on success and populates *out. Returns false on any I/O
@@ -32,8 +35,8 @@ struct WavData {
 bool load_wav_mono_pcm16(const std::string& path, WavData* out);
 
 // Returns true on success. Writes a mono PCM16 RIFF/WAVE file.
+bool write_wav_mono_pcm16(const std::string& path, const WavData& data);
+bool write_wav_mono_pcm16(const std::string& path, const std::vector<float>& data, int sample_rate);
 bool write_wav_mono_pcm16(const std::string& path,
                           const float* samples, size_t count,
                           int sample_rate);
-
-}  // namespace fdb_bench

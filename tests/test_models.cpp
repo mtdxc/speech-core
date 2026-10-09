@@ -15,6 +15,7 @@
 //     SPEECH_MODEL_DIR=scripts/models ctest --test-dir build --output-on-failure
 
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 #include "speech_core/interfaces.h"
 #include "speech_core/models/deepfilter.h"
 #include "speech_core/models/kokoro_tts.h"
@@ -137,62 +138,6 @@ std::string test_audio_path() {
 #endif
 }
 
-/// Minimal WAV reader — mono PCM16 little-endian only.
-/// Returns audio as Float32 normalised to [-1, 1], plus the sample rate.
-/// Returns empty samples on any failure (caller should skip the test).
-struct WavData {
-    std::vector<float> samples;
-    int sample_rate = 0;
-};
-WavData load_wav_mono_pcm16(const std::string& path) {
-    WavData out;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return out;
-
-    char riff[4], wave[4];
-    uint32_t file_size, fmt_size;
-    f.read(riff, 4);
-    f.read(reinterpret_cast<char*>(&file_size), 4);
-    f.read(wave, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0) return out;
-
-    // Iterate chunks until we find "fmt " and "data".
-    char chunk_id[4];
-    uint32_t chunk_size;
-    uint16_t audio_format = 0, num_channels = 0, bits_per_sample = 0;
-    uint32_t sample_rate = 0;
-    bool have_fmt = false, have_data = false;
-
-    while (f.read(chunk_id, 4)) {
-        f.read(reinterpret_cast<char*>(&chunk_size), 4);
-        if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
-            f.read(reinterpret_cast<char*>(&audio_format), 2);
-            f.read(reinterpret_cast<char*>(&num_channels), 2);
-            f.read(reinterpret_cast<char*>(&sample_rate), 4);
-            f.seekg(6, std::ios::cur);  // byte_rate (4) + block_align (2)
-            f.read(reinterpret_cast<char*>(&bits_per_sample), 2);
-            if (chunk_size > 16) f.seekg(chunk_size - 16, std::ios::cur);
-            have_fmt = true;
-        } else if (std::memcmp(chunk_id, "data", 4) == 0) {
-            if (!have_fmt || audio_format != 1 || num_channels != 1 || bits_per_sample != 16) return out;
-            size_t n_samples = chunk_size / 2;
-            std::vector<int16_t> pcm(n_samples);
-            f.read(reinterpret_cast<char*>(pcm.data()), chunk_size);
-            out.samples.resize(n_samples);
-            for (size_t i = 0; i < n_samples; ++i) {
-                out.samples[i] = static_cast<float>(pcm[i]) / 32768.0f;
-            }
-            out.sample_rate = static_cast<int>(sample_rate);
-            have_data = true;
-            break;
-        } else {
-            f.seekg(chunk_size, std::ios::cur);
-        }
-    }
-    if (!have_data) out = {};
-    return out;
-}
-
 // Generate a 16 kHz tone (sine) and 16 kHz silence chunk.
 std::vector<float> generate_tone(int sample_rate, float freq, float seconds, float amp = 0.3f) {
     size_t n = static_cast<size_t>(seconds * sample_rate);
@@ -249,7 +194,8 @@ void test_silero_vad(const std::string& dir) {
 
 void test_silero_vad_real_speech(const std::string& dir) {
     std::string model = dir + "/silero-vad.onnx";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(model)) {
         std::printf("  [skip] silero-vad.onnx not in %s\n", dir.c_str());
         return;

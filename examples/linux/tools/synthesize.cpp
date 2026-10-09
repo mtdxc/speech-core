@@ -11,6 +11,7 @@
 // inspect the raw audio buffer the model emits.
 
 #include <speech_core/models/kokoro_tts.h>
+#include <speech_core/audio/wav_io.h>
 
 #include "../../common/default_model_dir.h"
 
@@ -22,48 +23,7 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 constexpr int kSampleRate = 24000;
-
-static bool write_wav(const std::string& path,
-                      const float* samples, size_t count, int sample_rate) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f.is_open()) return false;
-
-    auto put32 = [&](uint32_t v) {
-        char b[4] = {char(v & 0xFF), char((v >> 8) & 0xFF),
-                     char((v >> 16) & 0xFF), char((v >> 24) & 0xFF)};
-        f.write(b, 4);
-    };
-    auto put16 = [&](uint16_t v) {
-        char b[2] = {char(v & 0xFF), char((v >> 8) & 0xFF)};
-        f.write(b, 2);
-    };
-
-    const uint32_t data_bytes = static_cast<uint32_t>(count) * 2;
-    f.write("RIFF", 4); put32(36 + data_bytes);
-    f.write("WAVE", 4);
-    f.write("fmt ", 4); put32(16);
-    put16(1);                               // PCM
-    put16(1);                               // mono
-    put32(static_cast<uint32_t>(sample_rate));
-    put32(static_cast<uint32_t>(sample_rate) * 2);
-    put16(2);                               // block align
-    put16(16);                              // bits/sample
-    f.write("data", 4); put32(data_bytes);
-
-    for (size_t i = 0; i < count; i++) {
-        float clamped = samples[i];
-        if (clamped < -1.0f) clamped = -1.0f;
-        if (clamped >  1.0f) clamped =  1.0f;
-        int16_t v = static_cast<int16_t>(clamped * 32767.0f);
-        put16(static_cast<uint16_t>(v));
-    }
-    return f.good();
-}
-
-}  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 3) {
@@ -106,7 +66,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!write_wav(out_wav, samples.data(), samples.size(), kSampleRate)) {
+    if (!write_wav_mono_pcm16(out_wav, samples, kSampleRate)) {
         std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
         return 1;
     }

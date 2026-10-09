@@ -12,6 +12,7 @@
 //     SPEECH_LITERT_MODEL_DIR=scripts/models-litert ctest --test-dir build --output-on-failure
 
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 #include "speech_core/interfaces.h"
 #include "speech_core/diarization/diarization_pipeline.h"
 #include "speech_core/models/litert_nemotron_streaming_stt.h"
@@ -86,58 +87,6 @@ std::string test_hindi_ref_path() {
 #else
     return "tests/data/test_hindi_ref.wav";
 #endif
-}
-
-struct WavData {
-    std::vector<float> samples;
-    int sample_rate = 0;
-};
-WavData load_wav_mono_pcm16(const std::string& path) {
-    WavData out;
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return out;
-
-    char riff[4], wave[4];
-    uint32_t file_size, fmt_size;
-    f.read(riff, 4);
-    f.read(reinterpret_cast<char*>(&file_size), 4);
-    f.read(wave, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0) return out;
-
-    char chunk_id[4];
-    uint32_t chunk_size;
-    uint16_t audio_format = 0, num_channels = 0, bits_per_sample = 0;
-    uint32_t sample_rate = 0;
-    bool have_fmt = false, have_data = false;
-
-    while (f.read(chunk_id, 4)) {
-        f.read(reinterpret_cast<char*>(&chunk_size), 4);
-        if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
-            f.read(reinterpret_cast<char*>(&audio_format), 2);
-            f.read(reinterpret_cast<char*>(&num_channels), 2);
-            f.read(reinterpret_cast<char*>(&sample_rate), 4);
-            f.seekg(6, std::ios::cur);
-            f.read(reinterpret_cast<char*>(&bits_per_sample), 2);
-            if (chunk_size > 16) f.seekg(chunk_size - 16, std::ios::cur);
-            have_fmt = true;
-        } else if (std::memcmp(chunk_id, "data", 4) == 0) {
-            if (!have_fmt || audio_format != 1 || num_channels != 1 || bits_per_sample != 16) return out;
-            size_t n_samples = chunk_size / 2;
-            std::vector<int16_t> pcm(n_samples);
-            f.read(reinterpret_cast<char*>(pcm.data()), chunk_size);
-            out.samples.resize(n_samples);
-            for (size_t i = 0; i < n_samples; ++i) {
-                out.samples[i] = static_cast<float>(pcm[i]) / 32768.0f;
-            }
-            out.sample_rate = static_cast<int>(sample_rate);
-            have_data = true;
-            break;
-        } else {
-            f.seekg(chunk_size, std::ios::cur);
-        }
-    }
-    if (!have_data) out = {};
-    return out;
 }
 
 std::vector<float> generate_tone(int sample_rate, float freq, float seconds, float amp = 0.3f) {
@@ -250,7 +199,8 @@ void test_litert_silero_vad(const std::string& dir) {
 
 void test_litert_silero_vad_real_speech(const std::string& dir) {
     std::string model = dir + "/silero-vad.tflite";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(model)) {
         std::printf("  [skip] silero-vad.tflite not in %s\n", dir.c_str());
         return;
@@ -330,7 +280,8 @@ void test_litert_parakeet_real_speech(const std::string& dir) {
     std::string enc   = dir + "/parakeet-encoder.tflite";
     std::string dec   = dir + "/parakeet-decoder-joint.tflite";
     std::string vocab = dir + "/vocab.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(enc) || !file_exists(dec) || !file_exists(vocab)) {
         std::printf("  [skip] parakeet files not in %s\n", dir.c_str());
         return;
@@ -370,7 +321,8 @@ void test_litert_parakeet_streaming(const std::string& dir) {
     std::string enc   = dir + "/parakeet-encoder.tflite";
     std::string dec   = dir + "/parakeet-decoder-joint.tflite";
     std::string vocab = dir + "/vocab.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(enc) || !file_exists(dec) || !file_exists(vocab)) {
         std::printf("  [skip] parakeet files not in %s\n", dir.c_str());
         return;
@@ -419,7 +371,8 @@ void test_litert_vad_to_stt_pipeline(const std::string& dir) {
     std::string enc       = dir + "/parakeet-encoder.tflite";
     std::string dec       = dir + "/parakeet-decoder-joint.tflite";
     std::string vocab     = dir + "/vocab.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(vad_model) || !file_exists(enc) || !file_exists(dec) || !file_exists(vocab)) {
         std::printf("  [skip] pipeline needs both silero and parakeet files in %s\n", dir.c_str());
         return;
@@ -687,7 +640,8 @@ void test_litert_voxcpm2_clone(const std::string& dir) {
     std::string enc  = dir + "/voxcpm2-audio-encoder.tflite";
     std::string dec  = dir + "/voxcpm2-audio-decoder.tflite";
     std::string tok  = dir + "/tokenizer.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(pref) || !file_exists(step) || !file_exists(enc)
         || !file_exists(dec) || !file_exists(tok)) {
         std::printf("  [skip] voxcpm2 files not in %s\n", dir.c_str());
@@ -849,7 +803,8 @@ void test_litert_voxcpm2_clone_parakeet_roundtrip(const std::string& dir) {
     std::string par_enc = dir + "/parakeet-encoder.tflite";
     std::string par_dec = dir + "/parakeet-decoder-joint.tflite";
     std::string vocab   = dir + "/vocab.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(pref) || !file_exists(step) || !file_exists(vox_enc)
         || !file_exists(vox_dec) || !file_exists(tok)) {
         std::printf("  [skip] voxcpm2 files not in %s\n", dir.c_str());
@@ -910,7 +865,8 @@ void test_litert_voxcpm2_clone_parakeet_roundtrip(const std::string& dir) {
 void test_voxcpm2_c_api(const std::string& dir) {
     std::string pref = dir + "/voxcpm2-text-prefill.tflite";
     std::string tok  = dir + "/tokenizer.json";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(pref) || !file_exists(tok) || wav.samples.empty()) {
         std::printf("  [skip] voxcpm2 files/fixture not in %s\n", dir.c_str());
         return;
@@ -995,7 +951,8 @@ void test_litert_pyannote_segmentation(const std::string& dir) {
     REQUIRE(seg.input_sample_rate() == 16000);
     REQUIRE(seg.max_local_speakers() == 3);
 
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     std::vector<float> audio;
     if (!wav.samples.empty()) {
         audio = wav.sample_rate == 16000
@@ -1039,7 +996,8 @@ void test_litert_omnilingual_stt(const std::string& dir) {
     speech_core::LiteRTOmnilingualStt stt(model, tok, /*hw_accel=*/false);
     REQUIRE(stt.input_sample_rate() == 16000);
 
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     bool real_speech = !wav.samples.empty();
     std::vector<float> audio;
     if (real_speech) {
@@ -1066,7 +1024,8 @@ void test_litert_omnilingual_stt(const std::string& dir) {
 void test_litert_diarization(const std::string& dir) {
     std::string seg_model = dir + "/pyannote-segmentation.tflite";
     std::string emb_model = dir + "/wespeaker-resnet34.tflite";
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (!file_exists(seg_model) || !file_exists(emb_model)) {
         std::printf("  [skip] diarization needs pyannote + wespeaker in %s\n", dir.c_str());
         return;
@@ -1122,7 +1081,8 @@ void test_litert_nemotron_streaming_stt(const std::string& dir) {
         std::printf("  [skip] nemotron-streaming files not in %s\n", dir.c_str());
         return;
     }
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty()) {
         std::printf("  [skip] could not load %s\n", test_audio_path().c_str());
         return;
@@ -1163,7 +1123,8 @@ void test_litert_nemotron_multilingual_stt(const std::string& dir) {
         std::printf("  [skip] nemotron-multilingual files not in %s\n", dir.c_str());
         return;
     }
-    auto wav = load_wav_mono_pcm16(test_audio_path());
+    WavData wav;
+    load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty()) {
         std::printf("  [skip] could not load %s\n", test_audio_path().c_str());
         return;
@@ -1252,11 +1213,12 @@ void test_litert_voxcpm2_hindi_cloning(const std::string& dir) {
     // tests/data/test_hindi_ref.wav when present; fall back to the generic
     // English test fixture so the test still runs in CI without the bundle.
     std::string ref_path = test_hindi_ref_path();
-    auto wav = load_wav_mono_pcm16(ref_path);
+    WavData wav;
+    load_wav_mono_pcm16(ref_path, &wav);
     bool used_hindi_ref = !wav.samples.empty();
     if (!used_hindi_ref) {
         ref_path = test_audio_path();
-        wav = load_wav_mono_pcm16(ref_path);
+        load_wav_mono_pcm16(ref_path, &wav);
     }
     if (!file_exists(pref) || !file_exists(step) || !file_exists(venc)
         || !file_exists(vdec) || !file_exists(vtok) || wav.samples.empty()) {

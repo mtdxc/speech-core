@@ -56,6 +56,7 @@ add_library(speech_core
     src/audio/audio_buffer.cpp
     src/audio/resampler.cpp
     src/audio/pcm_codec.cpp
+    src/audio/wav_io.cpp
     src/audio/fft.cpp
     src/audio/offline_spectral_de_esser.cpp
     third_party/fftooura/ooura_fft_engine.cpp
@@ -1057,7 +1058,6 @@ if(SPEECH_CORE_BUILD_TESTS)
         add_executable(fdb_bench
             examples/fdb_bench/fdb_bench.cpp
             examples/fdb_bench/fdb_corpus.cpp
-            examples/fdb_bench/wav_io.cpp
         )
         target_include_directories(fdb_bench PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/fdb_bench)
@@ -1081,8 +1081,7 @@ if(SPEECH_CORE_BUILD_TESTS)
         if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fdb_bench_smoke.cpp)
             add_executable(test_fdb_bench_smoke
                 tests/test_fdb_bench_smoke.cpp
-                examples/fdb_bench/fdb_corpus.cpp
-                examples/fdb_bench/wav_io.cpp)
+                examples/fdb_bench/fdb_corpus.cpp)
             target_include_directories(test_fdb_bench_smoke PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/fdb_bench
                 ${CMAKE_CURRENT_SOURCE_DIR}/third_party/httplib
