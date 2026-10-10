@@ -35,8 +35,8 @@ int main() {
         return 0;
     }
 
-    WavData wav;
-    load_wav_mono_pcm16(test_audio_path(), &wav);
+    speech_core::WavData wav;
+    speech_core::load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty() || wav.sample_rate <= 0) {
         std::cerr << "Could not load the MOSS test WAV\n";
         return 1;

@@ -140,8 +140,8 @@ static_assert(classic_rtf(2000.0, 4.0) == 0.5,
               "RTF must be wall seconds divided by audio seconds");
 
 std::vector<float> load_audio_16k() {
-    WavData wav;
-    load_wav_mono_pcm16(test_audio_path(), &wav);
+    speech_core::WavData wav;
+    speech_core::load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty()) return {};
     if (wav.sample_rate == 16000) return wav.samples;
     return speech_core::Resampler::resample(wav.samples.data(), wav.samples.size(),
@@ -673,9 +673,9 @@ void bench_voxcpm2(const std::string& /*dir*/) {
 // stdout for the Python orchestrator to aggregate (WER computed there).
 // ---------------------------------------------------------------------------
 
-WavData read_wav(const std::string& path) {
-    WavData in;
-    load_wav_mono_pcm16(path, &in);
+speech_core::WavData read_wav(const std::string& path) {
+    speech_core::WavData in;
+    speech_core::load_wav_mono_pcm16(path, &in);
     return in;
 }
 

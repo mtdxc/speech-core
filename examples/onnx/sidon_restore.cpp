@@ -48,8 +48,11 @@ int main(int argc, char** argv) {
     const std::string in_wav  = args[2];
     const std::string out_wav = args[3];
 
-    WavData in;
-    if (!load_wav_mono_pcm16(in_wav, &in)) return 1;
+    speech_core::WavData in;
+    if (!speech_core::load_wav_mono_pcm16(in_wav, &in)) {
+        std::fprintf(stderr, "could not read WAV: %s\n", in_wav.c_str());
+        return 1;
+    }
     std::fprintf(stderr, "input: %zu samples @ %d Hz (%.2fs)\n",
                  in.samples.size(), in.sample_rate, in.duration());
 
@@ -64,7 +67,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "restoration produced no audio (clip too short?)\n");
             return 1;
         }
-        if (!write_wav_mono_pcm16(out_wav, restored, kOutSampleRate)) {
+        if (!speech_core::write_wav_mono_pcm16(out_wav, restored, kOutSampleRate)) {
             std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
             return 1;
         }

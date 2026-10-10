@@ -301,8 +301,8 @@ SampleResult process_one_sample(
 {
     SampleResult r;
 
-    WavData wav;
-    if (!load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+    speech_core::WavData wav;
+    if (!speech_core::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
         r.error = "load_wav_mono_pcm16 failed: " + s.input_wav_path;
         return r;
     }
@@ -420,7 +420,7 @@ SampleResult process_one_sample(
     fs::create_directories(out_dir);
     std::string wav_out = out_dir + "/" + s.category_dir_name +
                           "__" + s.sample_id + ".wav";
-    write_wav_mono_pcm16(wav_out, float_audio, out_rate);
+    speech_core::write_wav_mono_pcm16(wav_out, float_audio, out_rate);
 
     r.output_sample_rate = out_rate;
     r.output_duration_sec = out_rate > 0
@@ -555,9 +555,9 @@ int main(int argc, char** argv) {
         // Reload input WAV briefly just for duration recording. The
         // process_one_sample call below loads it again — small cost, keeps
         // the helper's signature minimal.
-        WavData wav;
+        speech_core::WavData wav;
         double in_dur = 0.0;
-        if (load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+        if (speech_core::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
             in_dur = wav.duration();
         }
 

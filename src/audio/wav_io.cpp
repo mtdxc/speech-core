@@ -1,10 +1,12 @@
 #include "speech_core/audio/wav_io.h"
 
-#include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <vector>
 
+namespace speech_core {
 namespace {
 
 uint16_t read_u16_le(const uint8_t* p) {
@@ -14,6 +16,34 @@ uint32_t read_u32_le(const uint8_t* p) {
     return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
            (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
 }
+
+float decode_sample(const uint8_t* p, int audio_format, int bits_per_sample) {
+    if (audio_format == 3) {
+        const uint32_t bits = read_u32_le(p);
+        float sample;
+        static_assert(sizeof(sample) == sizeof(bits), "WAV requires 32-bit float");
+        std::memcpy(&sample, &bits, sizeof(sample));
+        return sample;
+    }
+
+    uint32_t raw;
+    if (bits_per_sample == 16) {
+        raw = read_u16_le(p);
+    } else if (bits_per_sample == 24) {
+        raw = static_cast<uint32_t>(p[0]) |
+              (static_cast<uint32_t>(p[1]) << 8) |
+              (static_cast<uint32_t>(p[2]) << 16);
+    } else {
+        raw = read_u32_le(p);
+    }
+    int64_t value = raw;
+    if (raw & (uint32_t{1} << (bits_per_sample - 1))) {
+        value -= int64_t{1} << bits_per_sample;
+    }
+    return static_cast<float>(static_cast<double>(value) /
+                              static_cast<double>(int64_t{1} << (bits_per_sample - 1)));
+}
+
 void write_u16_le(std::ofstream& os, uint16_t v) {
     char buf[2] = {static_cast<char>(v & 0xff),
                    static_cast<char>((v >> 8) & 0xff)};
@@ -34,10 +64,10 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
     out->samples.clear();
     out->sample_rate = 0;
 
-    std::ifstream is(path, std::ios::binary);
+    std::ifstream is(std::filesystem::u8path(path), std::ios::binary);
     if (!is) return false;
 
-    // Read full file into a buffer — FDB clips are < 30 s so size is bounded.
+    // Keep the file buffer alive while walking and decoding its chunks.
     std::vector<uint8_t> buf((std::istreambuf_iterator<char>(is)),
                               std::istreambuf_iterator<char>());
     if (buf.size() < 44) return false;
@@ -53,11 +83,11 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
     const uint8_t* pcm_data = nullptr;
     size_t pcm_bytes = 0;
 
-    while (pos + 8 <= buf.size()) {
+    while (buf.size() - pos >= 8) {
         const uint8_t* chunk_id = buf.data() + pos;
         uint32_t chunk_size = read_u32_le(buf.data() + pos + 4);
         pos += 8;
-        if (pos + chunk_size > buf.size()) return false;
+        if (chunk_size > buf.size() - pos) return false;
 
         if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
             if (chunk_size < 16) return false;
@@ -71,60 +101,43 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
         }
         // Skip to next chunk (chunks are word-aligned).
         pos += chunk_size;
-        if (chunk_size & 1u) pos += 1;
+        if ((chunk_size & 1u) && pos < buf.size()) pos += 1;
     }
 
-    // FDB v1.0 ships two WAV flavours:
-    //   - PCM int16          (audio_format=1, bits=16)  — candor_pause_handling, icc_backchannel, synthetic_user_interruption
-    //   - IEEE Float 32-bit  (audio_format=3, bits=32)  — candor_turn_taking, synthetic_pause_handling
-    // The function name says pcm16 for historical reasons (PR #43), but the
-    // contract here is "mono float32 audio in [-1, 1], whatever the on-disk
-    // encoding was". Keeping the name avoids churn in all the call sites.
     if (channels < 1 || sample_rate <= 0 || pcm_data == nullptr) return false;
 
-    const bool is_pcm16   = (audio_format == 1 && bits_per_sample == 16);
+    const bool is_pcm = audio_format == 1 &&
+        (bits_per_sample == 16 || bits_per_sample == 24 || bits_per_sample == 32);
     const bool is_float32 = (audio_format == 3 && bits_per_sample == 32);
-    if (!is_pcm16 && !is_float32) return false;
+    if (!is_pcm && !is_float32) return false;
 
-    const size_t bytes_per_sample = is_pcm16 ? 2u : 4u;
+    const size_t bytes_per_sample = static_cast<size_t>(bits_per_sample / 8);
     const size_t bytes_per_frame = static_cast<size_t>(channels) * bytes_per_sample;
-    if (pcm_bytes < bytes_per_frame) return false;
+    if (pcm_bytes < bytes_per_frame || pcm_bytes % bytes_per_frame != 0) return false;
     const size_t num_frames = pcm_bytes / bytes_per_frame;
 
     out->samples.resize(num_frames);
     out->sample_rate = sample_rate;
 
-    if (is_pcm16) {
-        const auto* sp = reinterpret_cast<const int16_t*>(pcm_data);
-        for (size_t i = 0; i < num_frames; ++i) {
-            int acc = 0;
-            for (int c = 0; c < channels; ++c) acc += sp[i * channels + c];
-            const float avg = static_cast<float>(acc) /
-                              static_cast<float>(channels);
-            out->samples[i] = avg / 32768.0f;
+    for (size_t i = 0; i < num_frames; ++i) {
+        double sum = 0.0;
+        for (int c = 0; c < channels; ++c) {
+            const auto* sample = pcm_data +
+                (i * static_cast<size_t>(channels) + static_cast<size_t>(c)) * bytes_per_sample;
+            sum += decode_sample(sample, audio_format, bits_per_sample);
         }
-    } else {
-        // Float32 PCM is already in [-1, 1] — read with memcpy so we don't
-        // assume the pcm_data pointer is 4-byte aligned (the chunk offset
-        // depends on prior chunk sizes and isn't guaranteed to be aligned).
-        for (size_t i = 0; i < num_frames; ++i) {
-            float acc = 0.0f;
-            for (int c = 0; c < channels; ++c) {
-                float v;
-                std::memcpy(&v, pcm_data + (i * channels + c) * 4, 4);
-                acc += v;
-            }
-            out->samples[i] = acc / static_cast<float>(channels);
-        }
+        out->samples[i] = static_cast<float>(sum / channels);
     }
     return true;
 }
 
 bool write_wav_mono_pcm16(const std::string& path, const WavData& data) {
-    return write_wav_mono_pcm16(path, data.samples.data(), data.samples.size(), data.sample_rate);
+    return write_wav_mono_pcm16(
+        path, data.samples.data(), data.samples.size(), data.sample_rate);
 }
 
-bool write_wav_mono_pcm16(const std::string& path, const std::vector<float>& data, int sample_rate) {
+bool write_wav_mono_pcm16(const std::string& path,
+                          const std::vector<float>& data, int sample_rate) {
     return write_wav_mono_pcm16(path, data.data(), data.size(), sample_rate);
 }
 
@@ -138,11 +151,10 @@ bool WavData::save(const std::string& path) const {
 
 bool write_wav_mono_pcm16(const std::string& path,
                           const float* samples, size_t count,
-                          int sample_rate)
-{
+                          int sample_rate) {
     if (!samples || sample_rate <= 0) return false;
 
-    std::ofstream os(path, std::ios::binary);
+    std::ofstream os(std::filesystem::u8path(path), std::ios::binary);
     if (!os) return false;
 
     const uint32_t data_bytes = static_cast<uint32_t>(count * 2);
@@ -179,3 +191,5 @@ bool write_wav_mono_pcm16(const std::string& path,
 
     return static_cast<bool>(os);
 }
+
+}  // namespace speech_core

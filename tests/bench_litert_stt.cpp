@@ -80,8 +80,8 @@ static_assert(classic_rtf(2000.0, 4.0) == 0.5,
               "RTF must be wall seconds divided by audio seconds");
 
 std::vector<float> load_audio_16k() {
-    WavData wav;
-    load_wav_mono_pcm16(test_audio_path(), &wav);
+    speech_core::WavData wav;
+    speech_core::load_wav_mono_pcm16(test_audio_path(), &wav);
     if (wav.samples.empty()) return {};
     if (wav.sample_rate == 16000) return wav.samples;
     return speech_core::Resampler::resample(wav.samples.data(), wav.samples.size(),
@@ -289,9 +289,9 @@ void bench_omnilingual(const std::string& dir, int warmup, int runs) {
 // omnilingual via --backend.
 // ---------------------------------------------------------------------------
 
-WavData read_wav(const std::string& path) {
-    WavData wav;
-    load_wav_mono_pcm16(path, &wav);
+speech_core::WavData read_wav(const std::string& path) {
+    speech_core::WavData wav;
+    speech_core::load_wav_mono_pcm16(path, &wav);
     return wav;
 }
 
@@ -384,8 +384,8 @@ int corpus_nemotron(const std::string& dir, const std::string& manifest_path) {
         size_t c2 = line.find(',', c1 + 1); if (c2 == std::string::npos) continue;
         std::string uid = line.substr(0, c1);
         std::string wav_path = line.substr(c1 + 1, c2 - c1 - 1);
-        WavData wav;
-        load_wav_mono_pcm16(wav_path, &wav);
+        speech_core::WavData wav;
+        speech_core::load_wav_mono_pcm16(wav_path, &wav);
         if (wav.samples.empty()) { std::fprintf(stderr, "skip %s\n", uid.c_str()); continue; }
         auto a16k = wav.sample_rate == 16000
             ? wav.samples

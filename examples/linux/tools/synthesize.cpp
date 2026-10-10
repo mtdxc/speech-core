@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!write_wav_mono_pcm16(out_wav, samples, kSampleRate)) {
+    if (!speech_core::write_wav_mono_pcm16(out_wav, samples, kSampleRate)) {
         std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
         return 1;
     }

@@ -1,0 +1,94 @@
+// Keep checks active in Release and sanitizer builds.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
+#include "speech_core/audio/wav_io.h"
+#include "wav_test_fixture.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+
+using speech_core::WavData;
+using speech_core::load_wav_mono_pcm16;
+using speech_core::write_wav_mono_pcm16;
+
+namespace {
+
+void check_decode(const std::filesystem::path& path, uint16_t format, uint16_t bits,
+                  uint16_t channels, const std::vector<uint32_t>& samples,
+                  const std::vector<float>& expected) {
+    // The odd-sized JUNK chunk also makes float payloads only two-byte aligned.
+    wav_test::write_fixture(path, format, bits, channels, 48000, samples, true);
+    WavData wav;
+    assert(load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(wav.sample_rate == 48000);
+    assert(wav.samples.size() == expected.size());
+    assert(std::fabs(wav.duration() - static_cast<double>(expected.size()) / 48000) < 1e-12);
+    for (size_t i = 0; i < expected.size(); ++i) {
+        assert(std::fabs(wav.samples[i] - expected[i]) < 1e-7f);
+    }
+}
+
+void test_formats_and_downmix(const std::filesystem::path& path) {
+    check_decode(path, 1, 16, 1, {0x8000, 0xc000, 0, 0x4000, 0x7fff},
+                 {-1, -0.5f, 0, 0.5f, 32767.0f / 32768});
+    check_decode(path, 1, 24, 1, {0x800000, 0xc00000, 0, 0x400000, 0x7fffff},
+                 {-1, -0.5f, 0, 0.5f, 8388607.0f / 8388608});
+    check_decode(path, 1, 32, 1, {0x80000000, 0xc0000000, 0, 0x40000000, 0x7fffffff},
+                 {-1, -0.5f, 0, 0.5f, 1});
+    check_decode(path, 3, 32, 1, {0xbf800000, 0xbf000000, 0, 0x3f000000, 0x3f800000},
+                 {-1, -0.5f, 0, 0.5f, 1});
+    check_decode(path, 1, 16, 2, {0x8000, 0x4000, 0x4000, 0}, {-0.25f, 0.25f});
+    check_decode(path, 1, 24, 2, {0x800000, 0x400000, 0x400000, 0}, {-0.25f, 0.25f});
+    check_decode(path, 1, 32, 2, {0x80000000, 0x40000000, 0x40000000, 0}, {-0.25f, 0.25f});
+    check_decode(path, 3, 32, 2, {0xbf800000, 0x3f000000, 0x3f000000, 0}, {-0.25f, 0.25f});
+}
+
+void test_utf8_write_and_read(const std::filesystem::path& directory) {
+    const auto path = directory / std::filesystem::u8path(u8"\u092e\u0947\u0930\u093e-\u00e4udio.wav");
+    const WavData input{{-2, -0.5f, 0, 0.5f, 2}, 24000};
+    assert(write_wav_mono_pcm16(path.u8string(), input));
+    WavData output;
+    assert(load_wav_mono_pcm16(path.u8string(), &output));
+    assert(output.sample_rate == input.sample_rate);
+    assert(output.samples.size() == input.samples.size());
+    for (size_t i = 0; i < input.samples.size(); ++i) {
+        const float clipped = std::clamp(input.samples[i], -1.0f, 1.0f);
+        assert(std::fabs(output.samples[i] - clipped) < 2.0f / 32768);
+    }
+    const auto missing_parent = directory / "missing" / "out.wav";
+    assert(!write_wav_mono_pcm16(missing_parent.u8string(), input));
+}
+
+void test_invalid_input(const std::filesystem::path& path) {
+    WavData wav{{1}, 16000};
+    assert(!load_wav_mono_pcm16((path.u8string() + ".missing"), &wav));
+    assert(wav.samples.empty() && wav.sample_rate == 0);
+    assert(!load_wav_mono_pcm16(path.u8string(), nullptr));
+
+    wav_test::write_fixture(path, 1, 8, 1, 16000, {128});
+    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    wav_test::write_fixture(path, 1, 16, 1, 0, {0});
+    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    wav_test::write_fixture(path, 1, 16, 2, 16000, {0, 0, 0});
+    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+
+    wav_test::write_fixture(path, 1, 16, 1, 16000, {0, 1});
+    std::filesystem::resize_file(path, std::filesystem::file_size(path) - 2);
+    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(wav.samples.empty() && wav.sample_rate == 0);
+}
+
+}  // namespace
+
+int main() {
+    wav_test::TemporaryDirectory directory("speech_core_test_wav_io");
+    const auto path = directory.path / "fixture.wav";
+    test_formats_and_downmix(path);
+    test_utf8_write_and_read(directory.path);
+    test_invalid_input(path);
+    std::puts("All WAV I/O tests passed.");
+    return 0;
+}

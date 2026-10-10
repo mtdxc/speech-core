@@ -468,10 +468,11 @@ void test_cli_clone_roundtrip(const std::string& dir) {
             return;
         }
 
-        WavData wav;
-        std::vector<float>& audio = wav.samples;
-        REQUIRE(load_wav_mono_pcm16(out_wav, &wav));
-        REQUIRE(wav.sample_rate == 48000);
+        speech_core::WavData wav;
+        REQUIRE(speech_core::load_wav_mono_pcm16(out_wav, &wav));
+        const std::vector<float>& audio = wav.samples;
+        const int rate = wav.sample_rate;
+        REQUIRE(rate == 48000);
         const double dur = wav.duration();
         double rms_sq = 0.0;
         for (float s : audio) rms_sq += static_cast<double>(s) * s;
@@ -480,9 +481,9 @@ void test_cli_clone_roundtrip(const std::string& dir) {
         int matched = -1;
         std::string heard_text = "(asr off)";
         if (have_asr) {
-            std::vector<float> a16 = (wav.sample_rate == 16000)
+            std::vector<float> a16 = (rate == 16000)
                 ? audio
-                : speech_core::Resampler::resample(audio.data(), audio.size(), wav.sample_rate, 16000);
+                : speech_core::Resampler::resample(audio.data(), audio.size(), rate, 16000);
             const auto res = stt->transcribe(a16.data(), a16.size(), 16000);
             heard_text = res.text;
             const std::vector<std::string> heard = tokenize_words(res.text);

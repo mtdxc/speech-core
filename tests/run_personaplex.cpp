@@ -350,7 +350,7 @@ int main(int argc, char** argv) {
 
     // Write WAV
     const std::string wav_out = dir + "/personaplex_out.wav";
-    if (write_wav_mono_pcm16(wav_out, all_audio, 24000)) {
+    if (speech_core::write_wav_mono_pcm16(wav_out, all_audio, 24000)) {
         std::printf("\nWrote %s (%zu samples @ 24 kHz)\n", wav_out.c_str(), all_audio.size());
     } else {
         std::fprintf(stderr, "WARN: failed to write %s\n", wav_out.c_str());

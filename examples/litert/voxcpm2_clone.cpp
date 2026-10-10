@@ -106,9 +106,12 @@ int main(int argc, char** argv) {
                  text.size(), out_wav.c_str(), max_steps, seed);
 
     const bool no_ref = (ref_wav == "none");
-    WavData wav;
+    speech_core::WavData wav;
     if (!no_ref) {
-        if (!load_wav_mono_pcm16(ref_wav, &wav)) return 1;
+        if (!speech_core::load_wav_mono_pcm16(ref_wav, &wav)) {
+            std::fprintf(stderr, "could not read reference WAV: %s\n", ref_wav.c_str());
+            return 1;
+        }
         std::fprintf(stderr, "reference: %zu samples @ %d Hz (%.2fs)\n",
                      wav.samples.size(), wav.sample_rate, wav.duration());
     } else {
@@ -161,7 +164,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "synthesis produced no audio\n");
             return 1;
         }
-        if (!write_wav_mono_pcm16(out_wav, audio, kOutSampleRate)) {
+        if (!speech_core::write_wav_mono_pcm16(out_wav, audio, kOutSampleRate)) {
             std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
             return 1;
         }

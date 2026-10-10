@@ -78,8 +78,11 @@ int main(int argc, char** argv) {
     }
     if (model_path.empty()) model_path = default_model_path();
 
-    WavData in;
-    if (!load_wav_mono_pcm16(in_wav, &in)) return 1;
+    speech_core::WavData in;
+    if (!speech_core::load_wav_mono_pcm16(in_wav, &in)) {
+        std::fprintf(stderr, "could not read WAV: %s\n", in_wav.c_str());
+        return 1;
+    }
 
     try {
         speech_core::OnnxSmartTurn model(model_path, /*hardware_acceleration=*/false);

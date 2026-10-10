@@ -3,7 +3,7 @@
 // Usage: speech_transcribe [model_dir] <input.wav>
 //        (model_dir defaults to $SPEECH_MODEL_DIR, else ~/.cache/speech-core/models)
 //
-// Reads PCM Float32 / Int16 / Int24 mono or stereo at any sample rate, then
+// Reads PCM Int16 / Int24 / Int32 or Float32 mono or stereo at any sample rate, then
 // resamples + downmixes to 16 kHz mono Float32 and feeds it through the
 // pipeline. Useful for diagnosing TTS round-trip quality (synthesise speech,
 // transcribe it back, compare to the original prompt).
@@ -11,10 +11,12 @@
 // No external deps beyond libspeech.
 
 #include "speech.h"
+#include "speech_core/audio/resampler.h"
 #include "speech_core/audio/wav_io.h"
 
 #include "../../common/default_model_dir.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -81,24 +83,26 @@ int main(int argc, char** argv) {
             "usage: %s [model_dir] <input.wav>\n"
             "  model_dir : directory holding parakeet-* + silero-vad.onnx\n"
             "              (default: $SPEECH_MODEL_DIR, else %s)\n"
-            "  input.wav : audio to transcribe (mono or stereo, 16-bit/24-bit/float)\n",
+            "  input.wav : audio to transcribe (mono or stereo, 16-bit/24-bit/32-bit PCM or float32)\n",
             argv[0], speech_example_model_dir().c_str());
         return 2;
     }
     const std::string model_dir = (argc == 3) ? argv[1] : speech_example_model_dir();
     const std::string wav_path  = (argc == 3) ? argv[2] : argv[1];
 
-    WavData wav;
-    std::string err;
-    if (!load_wav_mono_pcm16(wav_path, &wav)) {
-        std::fprintf(stderr, "unable to open wav: %s\n", err.c_str());
+    speech_core::WavData wav;
+    if (!speech_core::load_wav_mono_pcm16(wav_path, &wav)) {
+        std::fprintf(stderr, "could not read WAV: %s\n", wav_path.c_str());
         return 1;
     }
     std::fprintf(stderr,
-        "loaded %s: %d Hz × %dch × %d-bit → %.2fs of 16 kHz mono\n",
-        wav_path.c_str(),
-        wav.sample_rate, 1, 16,
-        double(wav.samples.size()) / double(wav.sample_rate));
+        "loaded %s: %.2fs of mono audio at %d Hz → 16 kHz\n",
+        wav_path.c_str(), wav.duration(), wav.sample_rate);
+    if (wav.sample_rate != kTargetSampleRate) {
+        wav.samples = speech_core::Resampler::resample(
+            wav.samples.data(), wav.samples.size(), wav.sample_rate, kTargetSampleRate);
+        wav.sample_rate = kTargetSampleRate;
+    }
 
     speech_config_t cfg = speech_config_default();
     cfg.model_dir = model_dir.c_str();

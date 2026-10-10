@@ -368,7 +368,7 @@ int main(int argc, char** argv) {
         const double stt_load_ms = milliseconds(started, Clock::now());
 
         if (!failed_wav_dir.empty()) {
-            std::filesystem::create_directories(failed_wav_dir);
+            std::filesystem::create_directories(std::filesystem::u8path(failed_wav_dir));
         }
 
         std::printf("Pocket TTS -> Parakeet EOU round-trip intelligibility\n");
@@ -428,8 +428,11 @@ int main(int argc, char** argv) {
                  !result.tts.stopped_on_eos ||
                  normalize(result.transcript).empty())) {
                 char name[64];
-                std::snprintf(name, sizeof(name), "/case_%02zu.wav", index + 1);
-                write_wav_mono_pcm16(failed_wav_dir + name, audio_24k, 24000);
+                std::snprintf(name, sizeof(name), "case_%02zu.wav", index + 1);
+                const auto path = std::filesystem::u8path(failed_wav_dir) / name;
+                if (!speech_core::write_wav_mono_pcm16(path.u8string(), audio_24k, 24000)) {
+                    throw std::runtime_error("Cannot write WAV: " + path.u8string());
+                }
             }
             results.push_back(std::move(result));
             std::fflush(stdout);

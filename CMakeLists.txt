@@ -717,6 +717,17 @@ if(SPEECH_CORE_BUILD_TESTS)
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
     endforeach()
 
+    # Compile the real transcription CLI against a recording C ABI stub so
+    # native-rate WAV input and downmixing stay covered without model files.
+    if(TARGET test_transcribe_cli)
+        add_library(test_transcribe_cli_entry OBJECT examples/linux/tools/transcribe.cpp)
+        target_link_libraries(test_transcribe_cli_entry PRIVATE speech_core)
+        target_include_directories(test_transcribe_cli_entry PRIVATE examples/linux/include)
+        target_compile_definitions(test_transcribe_cli_entry PRIVATE main=speech_transcribe_cli_main)
+        target_sources(test_transcribe_cli PRIVATE $<TARGET_OBJECTS:test_transcribe_cli_entry>)
+        target_include_directories(test_transcribe_cli PRIVATE examples/linux/include)
+    endif()
+
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_openai_tts_server.cpp)
         add_executable(test_openai_tts_server
             tests/test_openai_tts_server.cpp)
