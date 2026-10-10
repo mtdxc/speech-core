@@ -21,6 +21,7 @@
 // transcript; the old flat 32-step stop floor → ~6 s render for a 2 s line.
 
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 #include "speech_core/models/litert_omnilingual_stt.h"
 
 #include <algorithm>
@@ -197,50 +198,6 @@ int run_cli(const std::vector<std::string>& args, const std::string& stderr_path
     return (rc == -1) ? -1 : WEXITSTATUS(rc);
 }
 #endif
-
-// ---------------------------------------------------------------------------
-// Minimal mono PCM-16 WAV reader (mirrors the loaders elsewhere in tests/).
-// ---------------------------------------------------------------------------
-
-bool load_wav_mono(const std::string& path, std::vector<float>& out, int& rate) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) return false;
-    char id[4];
-    uint32_t sz = 0;
-    f.read(id, 4);
-    f.read(reinterpret_cast<char*>(&sz), 4);
-    f.read(id, 4);
-    uint16_t fmt = 0, ch = 0, bits = 0;
-    uint32_t r = 0;
-    while (f.read(id, 4)) {
-        f.read(reinterpret_cast<char*>(&sz), 4);
-        if (!std::memcmp(id, "fmt ", 4)) {
-            f.read(reinterpret_cast<char*>(&fmt), 2);
-            f.read(reinterpret_cast<char*>(&ch), 2);
-            f.read(reinterpret_cast<char*>(&r), 4);
-            f.seekg(6, std::ios::cur);
-            f.read(reinterpret_cast<char*>(&bits), 2);
-            if (sz > 16) f.seekg(sz - 16, std::ios::cur);
-        } else if (!std::memcmp(id, "data", 4)) {
-            if (fmt != 1 || bits != 16 || ch == 0) return false;
-            size_t n = sz / 2;
-            std::vector<int16_t> pcm(n);
-            f.read(reinterpret_cast<char*>(pcm.data()), sz);
-            size_t frames = n / ch;
-            out.resize(frames);
-            for (size_t i = 0; i < frames; ++i) {
-                int acc = 0;
-                for (uint16_t c = 0; c < ch; ++c) acc += pcm[i * ch + c];
-                out[i] = static_cast<float>(acc) / (ch * 32768.0f);
-            }
-            rate = static_cast<int>(r);
-            return true;
-        } else {
-            f.seekg(sz, std::ios::cur);
-        }
-    }
-    return false;
-}
 
 // ---------------------------------------------------------------------------
 // Cross-script token matching for the ASR assertion. Omnilingual decodes
@@ -511,11 +468,12 @@ void test_cli_clone_roundtrip(const std::string& dir) {
             return;
         }
 
-        std::vector<float> audio;
-        int rate = 0;
-        REQUIRE(load_wav_mono(out_wav, audio, rate));
+        speech_core::WavData wav;
+        REQUIRE(speech_core::load_wav_mono_pcm16(out_wav, &wav));
+        const std::vector<float>& audio = wav.samples;
+        const int rate = wav.sample_rate;
         REQUIRE(rate == 48000);
-        const double dur = static_cast<double>(audio.size()) / rate;
+        const double dur = wav.duration();
         double rms_sq = 0.0;
         for (float s : audio) rms_sq += static_cast<double>(s) * s;
         const double rms = std::sqrt(rms_sq / std::max<size_t>(audio.size(), 1));

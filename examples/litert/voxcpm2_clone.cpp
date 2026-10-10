@@ -25,6 +25,7 @@
 // Pairs with speech_transcribe for a clone → ASR round-trip sanity check.
 
 #include <speech_core/models/litert_voxcpm2_tts.h>
+#include <speech_core/audio/wav_io.h>
 
 #include "../common/utf8_args.h"
 #include "../common/default_model_dir.h"
@@ -37,102 +38,7 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 constexpr int kOutSampleRate = 48000;
-
-// Minimal mono-float loader for a canonical PCM-16 RIFF/WAVE file. Multi-channel
-// input is down-mixed by averaging. Returns false on any parse failure.
-bool load_wav_mono(const std::string& path, std::vector<float>& out, int& sample_rate) {
-    // u8path: argv is UTF-8 (see utf8_args.h); MSVC's char* ifstream overload
-    // would reinterpret it through the active code page.
-    std::ifstream f(std::filesystem::u8path(path), std::ios::binary);
-    if (!f) { std::fprintf(stderr, "cannot open %s\n", path.c_str()); return false; }
-
-    char riff[4], wave[4];
-    uint32_t file_size = 0;
-    f.read(riff, 4);
-    f.read(reinterpret_cast<char*>(&file_size), 4);
-    f.read(wave, 4);
-    if (std::memcmp(riff, "RIFF", 4) != 0 || std::memcmp(wave, "WAVE", 4) != 0) {
-        std::fprintf(stderr, "%s is not a RIFF/WAVE file\n", path.c_str());
-        return false;
-    }
-
-    char chunk_id[4];
-    uint32_t chunk_size = 0;
-    uint16_t audio_format = 0, channels = 0, bits = 0;
-    uint32_t rate = 0;
-    bool have_fmt = false;
-
-    while (f.read(chunk_id, 4)) {
-        f.read(reinterpret_cast<char*>(&chunk_size), 4);
-        if (std::memcmp(chunk_id, "fmt ", 4) == 0) {
-            f.read(reinterpret_cast<char*>(&audio_format), 2);
-            f.read(reinterpret_cast<char*>(&channels), 2);
-            f.read(reinterpret_cast<char*>(&rate), 4);
-            f.seekg(6, std::ios::cur);                 // byte_rate + block_align
-            f.read(reinterpret_cast<char*>(&bits), 2);
-            if (chunk_size > 16) f.seekg(chunk_size - 16, std::ios::cur);
-            have_fmt = true;
-        } else if (std::memcmp(chunk_id, "data", 4) == 0) {
-            if (!have_fmt || audio_format != 1 || bits != 16 || channels == 0) {
-                std::fprintf(stderr, "%s: only 16-bit PCM WAV is supported\n", path.c_str());
-                return false;
-            }
-            const size_t n = chunk_size / 2;
-            std::vector<int16_t> pcm(n);
-            f.read(reinterpret_cast<char*>(pcm.data()), chunk_size);
-            const size_t frames = n / channels;
-            out.resize(frames);
-            for (size_t i = 0; i < frames; ++i) {
-                int acc = 0;
-                for (uint16_t c = 0; c < channels; ++c) acc += pcm[i * channels + c];
-                out[i] = static_cast<float>(acc) / (channels * 32768.0f);
-            }
-            sample_rate = static_cast<int>(rate);
-            return true;
-        } else {
-            f.seekg(chunk_size, std::ios::cur);
-        }
-    }
-    std::fprintf(stderr, "%s: no data chunk\n", path.c_str());
-    return false;
-}
-
-bool write_wav(const std::string& path, const float* samples, size_t count, int rate) {
-    std::ofstream f(std::filesystem::u8path(path), std::ios::binary);
-    if (!f) return false;
-    auto put32 = [&](uint32_t v) {
-        char b[4] = {char(v & 0xFF), char((v >> 8) & 0xFF),
-                     char((v >> 16) & 0xFF), char((v >> 24) & 0xFF)};
-        f.write(b, 4);
-    };
-    auto put16 = [&](uint16_t v) {
-        char b[2] = {char(v & 0xFF), char((v >> 8) & 0xFF)};
-        f.write(b, 2);
-    };
-    const uint32_t data_bytes = static_cast<uint32_t>(count) * 2;
-    f.write("RIFF", 4); put32(36 + data_bytes);
-    f.write("WAVE", 4);
-    f.write("fmt ", 4); put32(16);
-    put16(1);                                          // PCM
-    put16(1);                                          // mono
-    put32(static_cast<uint32_t>(rate));
-    put32(static_cast<uint32_t>(rate) * 2);            // byte rate
-    put16(2);                                          // block align
-    put16(16);                                         // bits/sample
-    f.write("data", 4); put32(data_bytes);
-    for (size_t i = 0; i < count; ++i) {
-        float s = samples[i];
-        if (s < -1.0f) s = -1.0f;
-        if (s >  1.0f) s =  1.0f;
-        put16(static_cast<uint16_t>(static_cast<int16_t>(s * 32767.0f)));
-    }
-    return f.good();
-}
-
-}  // namespace
 
 int main(int argc, char** argv) {
     // UTF-8 argv: on Windows the default char** conversion goes through the
@@ -200,12 +106,14 @@ int main(int argc, char** argv) {
                  text.size(), out_wav.c_str(), max_steps, seed);
 
     const bool no_ref = (ref_wav == "none");
-    std::vector<float> ref;
-    int ref_rate = 0;
+    speech_core::WavData wav;
     if (!no_ref) {
-        if (!load_wav_mono(ref_wav, ref, ref_rate)) return 1;
+        if (!speech_core::load_wav_mono_pcm16(ref_wav, &wav)) {
+            std::fprintf(stderr, "could not read reference WAV: %s\n", ref_wav.c_str());
+            return 1;
+        }
         std::fprintf(stderr, "reference: %zu samples @ %d Hz (%.2fs)\n",
-                     ref.size(), ref_rate, ref.empty() ? 0.0 : double(ref.size()) / ref_rate);
+                     wav.samples.size(), wav.sample_rate, wav.duration());
     } else {
         std::fprintf(stderr, "reference: none (uncloned baseline)\n");
     }
@@ -242,7 +150,7 @@ int main(int argc, char** argv) {
         if (min_stop > max_steps - 16) min_stop = max_steps - 16;
         tts.set_min_steps_before_stop(min_stop);
         if (seed > 0) tts.set_seed(static_cast<uint32_t>(seed));
-        if (!no_ref) tts.set_reference(ref.data(), ref.size(), ref_rate);
+        if (!no_ref) tts.set_reference(wav.samples.data(), wav.samples.size(), wav.sample_rate);
 
         std::vector<float> audio;
         bool got_final = false;
@@ -256,7 +164,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "synthesis produced no audio\n");
             return 1;
         }
-        if (!write_wav(out_wav, audio.data(), audio.size(), kOutSampleRate)) {
+        if (!speech_core::write_wav_mono_pcm16(out_wav, audio, kOutSampleRate)) {
             std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
             return 1;
         }

@@ -3,7 +3,7 @@
 // Usage: speech_transcribe [model_dir] <input.wav>
 //        (model_dir defaults to $SPEECH_MODEL_DIR, else ~/.cache/speech-core/models)
 //
-// Reads PCM Float32 / Int16 / Int24 mono or stereo at any sample rate, then
+// Reads PCM Int16 / Int24 / Int32 or Float32 mono or stereo at any sample rate, then
 // resamples + downmixes to 16 kHz mono Float32 and feeds it through the
 // pipeline. Useful for diagnosing TTS round-trip quality (synthesise speech,
 // transcribe it back, compare to the original prompt).
@@ -11,9 +11,13 @@
 // No external deps beyond libspeech.
 
 #include "speech.h"
+#include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
 
 #include "../../common/default_model_dir.h"
+#include "../../common/utf8_args.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -32,130 +36,6 @@ namespace {
 
 constexpr int kTargetSampleRate = 16000;
 constexpr size_t kChunkSamples = 512;  // 32 ms at 16 kHz
-
-// ---------------------------------------------------------------------------
-// WAV reader
-// ---------------------------------------------------------------------------
-
-struct WavData {
-    std::vector<float> samples;  // mono, target sample rate
-    int sample_rate = 0;
-    int original_sample_rate = 0;
-    int original_channels = 0;
-    int original_bits = 0;
-};
-
-static uint32_t read_u32(const uint8_t* p) {
-    return uint32_t(p[0]) | (uint32_t(p[1]) << 8)
-         | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
-}
-static uint16_t read_u16(const uint8_t* p) {
-    return uint16_t(p[0]) | (uint16_t(p[1]) << 8);
-}
-
-static bool load_wav(const std::string& path, WavData& out, std::string& err) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f.is_open()) { err = "cannot open " + path; return false; }
-
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(f)),
-                               std::istreambuf_iterator<char>());
-    if (bytes.size() < 44) { err = "file too small to be a WAV"; return false; }
-    if (std::memcmp(bytes.data(), "RIFF", 4) != 0 ||
-        std::memcmp(bytes.data() + 8, "WAVE", 4) != 0) {
-        err = "not a RIFF/WAVE file";
-        return false;
-    }
-
-    // Walk chunks looking for fmt + data.
-    size_t pos = 12;
-    uint16_t fmt_format = 0, fmt_channels = 0, fmt_bits = 0;
-    uint32_t fmt_rate = 0;
-    const uint8_t* data_ptr = nullptr;
-    uint32_t data_len = 0;
-    while (pos + 8 <= bytes.size()) {
-        const uint8_t* hdr = bytes.data() + pos;
-        const char tag[5] = {char(hdr[0]), char(hdr[1]), char(hdr[2]), char(hdr[3]), 0};
-        uint32_t chunk_len = read_u32(hdr + 4);
-        if (pos + 8 + chunk_len > bytes.size()) break;
-        if (std::strcmp(tag, "fmt ") == 0 && chunk_len >= 16) {
-            fmt_format = read_u16(hdr + 8);
-            fmt_channels = read_u16(hdr + 10);
-            fmt_rate = read_u32(hdr + 12);
-            fmt_bits = read_u16(hdr + 22);
-        } else if (std::strcmp(tag, "data") == 0) {
-            data_ptr = hdr + 8;
-            data_len = chunk_len;
-            break;
-        }
-        pos += 8 + chunk_len + (chunk_len & 1);  // pad to even
-    }
-    if (!data_ptr || fmt_channels == 0) {
-        err = "WAV has no fmt or data chunk";
-        return false;
-    }
-    if (fmt_format != 1 /*PCM*/ && fmt_format != 3 /*FLOAT*/) {
-        err = "WAV format " + std::to_string(fmt_format)
-            + " unsupported (need PCM=1 or FLOAT=3)";
-        return false;
-    }
-
-    out.original_sample_rate = static_cast<int>(fmt_rate);
-    out.original_channels = fmt_channels;
-    out.original_bits = fmt_bits;
-
-    // Decode + downmix to mono float
-    const size_t bytes_per_sample = fmt_bits / 8;
-    const size_t frame_bytes = bytes_per_sample * fmt_channels;
-    const size_t frame_count = data_len / frame_bytes;
-    std::vector<float> mono(frame_count);
-    for (size_t i = 0; i < frame_count; i++) {
-        float sum = 0.0f;
-        for (int c = 0; c < fmt_channels; c++) {
-            const uint8_t* sp = data_ptr + i * frame_bytes + c * bytes_per_sample;
-            float s = 0.0f;
-            if (fmt_format == 3 && fmt_bits == 32) {
-                std::memcpy(&s, sp, 4);
-            } else if (fmt_format == 1 && fmt_bits == 16) {
-                int16_t v = int16_t(uint16_t(sp[0]) | (uint16_t(sp[1]) << 8));
-                s = float(v) / 32768.0f;
-            } else if (fmt_format == 1 && fmt_bits == 24) {
-                int32_t v = int32_t(uint32_t(sp[0])
-                          | (uint32_t(sp[1]) << 8) | (uint32_t(sp[2]) << 16));
-                if (v & 0x800000) v |= 0xFF000000;  // sign extend
-                s = float(v) / 8388608.0f;
-            } else if (fmt_format == 1 && fmt_bits == 32) {
-                int32_t v = int32_t(read_u32(sp));
-                s = float(v) / 2147483648.0f;
-            } else {
-                err = "unsupported sample width " + std::to_string(fmt_bits);
-                return false;
-            }
-            sum += s;
-        }
-        mono[i] = sum / float(fmt_channels);
-    }
-
-    // Linear-interpolation resample to kTargetSampleRate. Cheap, but
-    // adequate for diagnosing model output — TTS bandwidth is well below
-    // 8 kHz so aliasing isn't a meaningful concern here.
-    if (static_cast<int>(fmt_rate) == kTargetSampleRate) {
-        out.samples = std::move(mono);
-    } else {
-        const double ratio = double(fmt_rate) / double(kTargetSampleRate);
-        const size_t out_len = size_t(double(mono.size()) / ratio);
-        out.samples.resize(out_len);
-        for (size_t i = 0; i < out_len; i++) {
-            double src = double(i) * ratio;
-            size_t i0 = size_t(src);
-            double frac = src - double(i0);
-            float a = mono[i0];
-            float b = (i0 + 1 < mono.size()) ? mono[i0 + 1] : a;
-            out.samples[i] = float(double(a) + (double(b) - double(a)) * frac);
-        }
-    }
-    out.sample_rate = kTargetSampleRate;
-    return true;
-}
 
 // ---------------------------------------------------------------------------
 // Pipeline event handler
@@ -199,29 +79,34 @@ static void on_event(const speech_event_t* event, void* ctx) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc != 2 && argc != 3) {
         std::fprintf(stderr,
             "usage: %s [model_dir] <input.wav>\n"
             "  model_dir : directory holding parakeet-* + silero-vad.onnx\n"
             "              (default: $SPEECH_MODEL_DIR, else %s)\n"
-            "  input.wav : audio to transcribe (mono or stereo, 16-bit/24-bit/float)\n",
-            argv[0], speech_example_model_dir().c_str());
+            "  input.wav : audio to transcribe (mono or stereo, 16-bit/24-bit/32-bit PCM or float32)\n",
+            args.empty() ? "speech_transcribe" : args[0].c_str(),
+            speech_example_model_dir().c_str());
         return 2;
     }
-    const std::string model_dir = (argc == 3) ? argv[1] : speech_example_model_dir();
-    const std::string wav_path  = (argc == 3) ? argv[2] : argv[1];
+    const std::string model_dir = (argc == 3) ? args[1] : speech_example_model_dir();
+    const std::string wav_path  = (argc == 3) ? args[2] : args[1];
 
-    WavData wav;
-    std::string err;
-    if (!load_wav(wav_path, wav, err)) {
-        std::fprintf(stderr, "wav: %s\n", err.c_str());
+    speech_core::WavData wav;
+    if (!speech_core::load_wav_mono_pcm16(wav_path, &wav)) {
+        std::fprintf(stderr, "could not read WAV: %s\n", wav_path.c_str());
         return 1;
     }
     std::fprintf(stderr,
-        "loaded %s: %d Hz × %dch × %d-bit → %.2fs of 16 kHz mono\n",
-        wav_path.c_str(),
-        wav.original_sample_rate, wav.original_channels, wav.original_bits,
-        double(wav.samples.size()) / double(wav.sample_rate));
+        "loaded %s: %.2fs of mono audio at %d Hz → 16 kHz\n",
+        wav_path.c_str(), wav.duration(), wav.sample_rate);
+    if (wav.sample_rate != kTargetSampleRate) {
+        wav.samples = speech_core::Resampler::resample(
+            wav.samples.data(), wav.samples.size(), wav.sample_rate, kTargetSampleRate);
+        wav.sample_rate = kTargetSampleRate;
+    }
 
     speech_config_t cfg = speech_config_default();
     cfg.model_dir = model_dir.c_str();

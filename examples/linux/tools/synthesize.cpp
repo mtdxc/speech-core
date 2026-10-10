@@ -11,8 +11,10 @@
 // inspect the raw audio buffer the model emits.
 
 #include <speech_core/models/kokoro_tts.h>
+#include <speech_core/audio/wav_io.h>
 
 #include "../../common/default_model_dir.h"
+#include "../../common/utf8_args.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -22,73 +24,35 @@
 #include <string>
 #include <vector>
 
-namespace {
-
 constexpr int kSampleRate = 24000;
 
-static bool write_wav(const std::string& path,
-                      const float* samples, size_t count, int sample_rate) {
-    std::ofstream f(path, std::ios::binary);
-    if (!f.is_open()) return false;
-
-    auto put32 = [&](uint32_t v) {
-        char b[4] = {char(v & 0xFF), char((v >> 8) & 0xFF),
-                     char((v >> 16) & 0xFF), char((v >> 24) & 0xFF)};
-        f.write(b, 4);
-    };
-    auto put16 = [&](uint16_t v) {
-        char b[2] = {char(v & 0xFF), char((v >> 8) & 0xFF)};
-        f.write(b, 2);
-    };
-
-    const uint32_t data_bytes = static_cast<uint32_t>(count) * 2;
-    f.write("RIFF", 4); put32(36 + data_bytes);
-    f.write("WAVE", 4);
-    f.write("fmt ", 4); put32(16);
-    put16(1);                               // PCM
-    put16(1);                               // mono
-    put32(static_cast<uint32_t>(sample_rate));
-    put32(static_cast<uint32_t>(sample_rate) * 2);
-    put16(2);                               // block align
-    put16(16);                              // bits/sample
-    f.write("data", 4); put32(data_bytes);
-
-    for (size_t i = 0; i < count; i++) {
-        float clamped = samples[i];
-        if (clamped < -1.0f) clamped = -1.0f;
-        if (clamped >  1.0f) clamped =  1.0f;
-        int16_t v = static_cast<int16_t>(clamped * 32767.0f);
-        put16(static_cast<uint16_t>(v));
-    }
-    return f.good();
-}
-
-}  // namespace
-
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
+    const char* argv0 = args.empty() ? "speech_synthesize" : args[0].c_str();
     if (argc < 3) {
         std::fprintf(stderr,
             "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n"
             "  model_dir : directory holding kokoro-e2e.onnx + voices/*.bin\n"
             "              (default: $SPEECH_MODEL_DIR, else %s)\n"
             "  language  : BCP-47 tag (default: en). Auto-switches voice.\n",
-            argv[0], speech_example_model_dir().c_str());
+            argv0, speech_example_model_dir().c_str());
         return 2;
     }
     // model_dir is optional. Old form: <model_dir> <out.wav> <text> [lang];
     // new form drops model_dir. With 4 args, both parses are plausible —
-    // disambiguate by whether argv[1] is an existing directory.
+    // disambiguate by whether args[1] is an existing directory.
     const bool has_dir = (argc >= 5)
-        || (argc == 4 && std::filesystem::is_directory(argv[1]));
+        || (argc == 4 && std::filesystem::is_directory(std::filesystem::u8path(args[1])));
     const int base = has_dir ? 2 : 1;
     if (argc < base + 2) {
-        std::fprintf(stderr, "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n", argv0);
         return 2;
     }
-    const std::string model_dir = has_dir ? argv[1] : speech_example_model_dir();
-    const std::string out_wav   = argv[base];
-    const std::string text      = argv[base + 1];
-    const std::string language  = (argc >= base + 3) ? argv[base + 2] : "en";
+    const std::string model_dir = has_dir ? args[1] : speech_example_model_dir();
+    const std::string out_wav   = args[base];
+    const std::string text      = args[base + 1];
+    const std::string language  = (argc >= base + 3) ? args[base + 2] : "en";
 
     speech_core::KokoroTts tts(model_dir + "/kokoro-e2e.onnx",
                                model_dir + "/voices",
@@ -106,7 +70,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    if (!write_wav(out_wav, samples.data(), samples.size(), kSampleRate)) {
+    if (!speech_core::write_wav_mono_pcm16(out_wav, samples, kSampleRate)) {
         std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
         return 1;
     }

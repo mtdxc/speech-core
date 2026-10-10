@@ -9,10 +9,12 @@
 //       <reference transcript> <text> <out.wav> [seed]
 
 #include <speech_core/models/onnx_cosyvoice3_tts.h>
-
+#include <speech_core/audio/wav_io.h>
+#include "../common/utf8_args.h"
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -20,7 +22,7 @@
 namespace {
 
 std::vector<uint8_t> read_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(std::filesystem::u8path(path), std::ios::binary | std::ios::ate);
     if (!f.good()) throw std::runtime_error("cannot read " + path);
     const std::streamsize n = f.tellg();
     f.seekg(0);
@@ -31,38 +33,23 @@ std::vector<uint8_t> read_file(const std::string& path) {
     return data;
 }
 
-void write_wav(const std::string& path, const std::vector<float>& pcm, int rate) {
-    std::ofstream f(path, std::ios::binary);
-    auto u32 = [&](uint32_t v) { f.write(reinterpret_cast<const char*>(&v), 4); };
-    auto u16 = [&](uint16_t v) { f.write(reinterpret_cast<const char*>(&v), 2); };
-    const uint32_t data_bytes = static_cast<uint32_t>(pcm.size() * 2);
-    f.write("RIFF", 4); u32(36 + data_bytes); f.write("WAVE", 4);
-    f.write("fmt ", 4); u32(16); u16(1); u16(1);
-    u32(static_cast<uint32_t>(rate)); u32(static_cast<uint32_t>(rate * 2));
-    u16(2); u16(16);
-    f.write("data", 4); u32(data_bytes);
-    for (float v : pcm) {
-        const float c = v < -1.0f ? -1.0f : (v > 1.0f ? 1.0f : v);
-        const int16_t s = static_cast<int16_t>(c * 32767.0f);
-        f.write(reinterpret_cast<const char*>(&s), 2);
-    }
-}
-
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 6) {
         std::fprintf(stderr,
             "usage: %s <bundle_dir> <conditioning.blob> <transcript> <text> <out.wav> [seed]\n",
-            argv[0]);
+            args.empty() ? "speech_cosyvoice3_synth_onnx" : args[0].c_str());
         return 2;
     }
-    const std::string bundle_dir = argv[1];
-    const std::string blob_path = argv[2];
-    const std::string transcript = argv[3];
-    const std::string text = argv[4];
-    const std::string out_path = argv[5];
-    const uint32_t seed = argc > 6 ? static_cast<uint32_t>(std::stoul(argv[6])) : 7u;
+    const std::string bundle_dir = args[1];
+    const std::string blob_path = args[2];
+    const std::string transcript = args[3];
+    const std::string text = args[4];
+    const std::string out_path = args[5];
+    const uint32_t seed = argc > 6 ? static_cast<uint32_t>(std::stoul(args[6])) : 7u;
 
     speech_core::OnnxCosyVoice3Tts tts(bundle_dir, /*hw_accel=*/false);
 
@@ -81,7 +68,7 @@ int main(int argc, char** argv) {
         pcm.insert(pcm.end(), data, data + n);
     });
 
-    write_wav(out_path, pcm, tts.output_sample_rate());
+    speech_core::write_wav_mono_pcm16(out_path, pcm, tts.output_sample_rate());
     std::printf("tokens=%d stop=%d prefill=%lldms ar=%lldms decode=%lldms samples=%zu -> %s\n",
                 tts.tokens_generated(), tts.stopped_on_stop_token() ? 1 : 0,
                 static_cast<long long>(tts.prefill_ms()),

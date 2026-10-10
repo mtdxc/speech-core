@@ -1,4 +1,6 @@
 #include "speech_core/audio/resampler.h"
+#include "speech_core/audio/wav_io.h"
+#include "../common/utf8_args.h"
 #include "speech_core/models/onnx_nemotron_streaming_stt.h"
 #include "speech_core/models/onnx_pocket_tts.h"
 
@@ -75,7 +77,7 @@ std::vector<std::string> split(const std::string& text, char delimiter) {
 }
 
 std::vector<TestCase> read_corpus(const std::string& path) {
-    std::ifstream stream(path);
+    std::ifstream stream(std::filesystem::u8path(path));
     if (!stream) throw std::runtime_error("Cannot open round-trip corpus: " + path);
 
     std::vector<TestCase> cases;
@@ -227,47 +229,6 @@ Result score(TestCase test,
     return result;
 }
 
-void write_u16(std::FILE* stream, std::uint16_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_u32(std::FILE* stream, std::uint32_t value) {
-    const unsigned char bytes[] = {
-        static_cast<unsigned char>(value & 0xff),
-        static_cast<unsigned char>((value >> 8) & 0xff),
-        static_cast<unsigned char>((value >> 16) & 0xff),
-        static_cast<unsigned char>((value >> 24) & 0xff)};
-    std::fwrite(bytes, 1, sizeof(bytes), stream);
-}
-
-void write_wav(const std::filesystem::path& path,
-               const std::vector<float>& samples) {
-    std::FILE* stream = std::fopen(path.string().c_str(), "wb");
-    if (!stream) throw std::runtime_error("Cannot write WAV: " + path.string());
-    const auto bytes = static_cast<std::uint32_t>(samples.size() * sizeof(std::int16_t));
-    std::fwrite("RIFF", 1, 4, stream);
-    write_u32(stream, 36 + bytes);
-    std::fwrite("WAVEfmt ", 1, 8, stream);
-    write_u32(stream, 16);
-    write_u16(stream, 1);
-    write_u16(stream, 1);
-    write_u32(stream, 24000);
-    write_u32(stream, 48000);
-    write_u16(stream, 2);
-    write_u16(stream, 16);
-    std::fwrite("data", 1, 4, stream);
-    write_u32(stream, bytes);
-    for (const float sample : samples) {
-        const float clipped = std::max(-1.0f, std::min(1.0f, sample));
-        const auto value = static_cast<std::int16_t>(std::lrint(clipped * 32767.0f));
-        write_u16(stream, static_cast<std::uint16_t>(value));
-    }
-    std::fclose(stream);
-}
-
 std::string json_escape(const std::string& value) {
     std::string result;
     for (const unsigned char byte : value) {
@@ -312,7 +273,7 @@ void write_report(const std::string& path,
                   double stt_load_ms,
                   bool passed) {
     if (path.empty()) return;
-    std::ofstream stream(path);
+    std::ofstream stream(std::filesystem::u8path(path));
     if (!stream) throw std::runtime_error("Cannot write JSON report: " + path);
     stream << std::fixed << std::setprecision(6);
     stream << "{\n  \"format_version\": 1,\n"
@@ -364,22 +325,24 @@ void write_report(const std::string& path,
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 4) {
         std::fprintf(stderr,
             "Usage: %s POCKET_BUNDLE STT_BUNDLE CORPUS_TSV [THREADS] [STEPS] "
             "[SEED] [REPORT_JSON] [FAILED_WAV_DIR]\n",
-            argv[0]);
+            args.empty() ? "speech_pocket_tts_roundtrip" : args[0].c_str());
         return 2;
     }
 
-    const std::string pocket_bundle = argv[1];
-    const std::string stt_bundle = argv[2];
-    const std::string corpus_path = argv[3];
-    const int threads = argc > 4 ? std::atoi(argv[4]) : 2;
-    const int steps = argc > 5 ? std::atoi(argv[5]) : 4;
-    const int seed = argc > 6 ? std::atoi(argv[6]) : 42;
-    const std::string report_path = argc > 7 ? argv[7] : "";
-    const std::string failed_wav_dir = argc > 8 ? argv[8] : "";
+    const std::string pocket_bundle = args[1];
+    const std::string stt_bundle = args[2];
+    const std::string corpus_path = args[3];
+    const int threads = argc > 4 ? std::atoi(args[4].c_str()) : 2;
+    const int steps = argc > 5 ? std::atoi(args[5].c_str()) : 4;
+    const int seed = argc > 6 ? std::atoi(args[6].c_str()) : 42;
+    const std::string report_path = argc > 7 ? args[7] : "";
+    const std::string failed_wav_dir = argc > 8 ? args[8] : "";
     const char* write_all_value =
         std::getenv("SPEECH_POCKET_TTS_ROUNDTRIP_WRITE_ALL");
     const bool write_all_wavs =
@@ -408,7 +371,7 @@ int main(int argc, char** argv) {
         const double stt_load_ms = milliseconds(started, Clock::now());
 
         if (!failed_wav_dir.empty()) {
-            std::filesystem::create_directories(failed_wav_dir);
+            std::filesystem::create_directories(std::filesystem::u8path(failed_wav_dir));
         }
 
         std::printf("Pocket TTS -> Parakeet EOU round-trip intelligibility\n");
@@ -469,7 +432,10 @@ int main(int argc, char** argv) {
                  normalize(result.transcript).empty())) {
                 char name[64];
                 std::snprintf(name, sizeof(name), "case_%02zu.wav", index + 1);
-                write_wav(std::filesystem::path(failed_wav_dir) / name, audio_24k);
+                const auto path = std::filesystem::u8path(failed_wav_dir) / name;
+                if (!speech_core::write_wav_mono_pcm16(path.u8string(), audio_24k, 24000)) {
+                    throw std::runtime_error("Cannot write WAV: " + path.u8string());
+                }
             }
             results.push_back(std::move(result));
             std::fflush(stdout);

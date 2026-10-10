@@ -56,6 +56,7 @@ add_library(speech_core
     src/audio/audio_buffer.cpp
     src/audio/resampler.cpp
     src/audio/pcm_codec.cpp
+    src/audio/wav_io.cpp
     src/audio/fft.cpp
     src/audio/offline_spectral_de_esser.cpp
     third_party/fftooura/ooura_fft_engine.cpp
@@ -720,6 +721,18 @@ if(SPEECH_CORE_BUILD_TESTS)
         add_test(NAME ${TEST_NAME} COMMAND ${TEST_NAME})
     endforeach()
 
+    # Compile the real transcription CLI against a recording C ABI stub so
+    # native-rate WAV input, downmixing, and OS UTF-8 argv stay covered without
+    # model files. The test launches child processes running this entry point.
+    if(TARGET test_transcribe_cli)
+        add_library(test_transcribe_cli_entry OBJECT examples/linux/tools/transcribe.cpp)
+        target_link_libraries(test_transcribe_cli_entry PRIVATE speech_core)
+        target_include_directories(test_transcribe_cli_entry PRIVATE examples/linux/include)
+        target_compile_definitions(test_transcribe_cli_entry PRIVATE main=speech_transcribe_cli_main)
+        target_sources(test_transcribe_cli PRIVATE $<TARGET_OBJECTS:test_transcribe_cli_entry>)
+        target_include_directories(test_transcribe_cli PRIVATE examples/linux/include)
+    endif()
+
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_openai_tts_server.cpp)
         add_executable(test_openai_tts_server
             tests/test_openai_tts_server.cpp)
@@ -1069,7 +1082,6 @@ if(SPEECH_CORE_BUILD_TESTS)
         add_executable(fdb_bench
             examples/fdb_bench/fdb_bench.cpp
             examples/fdb_bench/fdb_corpus.cpp
-            examples/fdb_bench/wav_io.cpp
         )
         target_include_directories(fdb_bench PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/fdb_bench)
@@ -1093,8 +1105,7 @@ if(SPEECH_CORE_BUILD_TESTS)
         if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_fdb_bench_smoke.cpp)
             add_executable(test_fdb_bench_smoke
                 tests/test_fdb_bench_smoke.cpp
-                examples/fdb_bench/fdb_corpus.cpp
-                examples/fdb_bench/wav_io.cpp)
+                examples/fdb_bench/fdb_corpus.cpp)
             target_include_directories(test_fdb_bench_smoke PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/fdb_bench
                 ${CMAKE_CURRENT_SOURCE_DIR}/third_party/httplib

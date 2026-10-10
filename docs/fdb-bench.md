@@ -12,7 +12,9 @@ In:
 - Corpus iterator that walks the real FDB v1.0 layout
   (`v1_0/{candor_pause_handling,synthetic_pause_handling,
   candor_turn_taking,synthetic_user_interruption,icc_backchannel}/<id>/`).
-- Tiny WAV reader/writer vendored under `examples/fdb_bench/`.
+- Shared WAV reader/writer in `speech_core/audio/wav_io.h`, built into the
+  dependency-free core library. It accepts PCM16/24/32 and IEEE float32,
+  averages channels to mono, and preserves the file's native sample rate.
 - Per-sample driver loop with mock STT + mock TTS by default so the
   binary builds and runs without ORT or model files.
 - `OllamaLLM` adapter (PR #61) as the only LLM backend.

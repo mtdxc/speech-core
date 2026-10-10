@@ -8,7 +8,8 @@
 // Ollama server.
 
 #include "fdb_corpus.h"
-#include "wav_io.h"
+#include "speech_core/audio/wav_io.h"
+#include "../common/utf8_args.h"
 
 #include "speech_core/audio/pcm_codec.h"
 #include "speech_core/audio/resampler.h"
@@ -162,7 +163,8 @@ void print_usage() {
         "  -h, --help             this help\n");
 }
 
-Args parse_args(int argc, char** argv) {
+Args parse_args(const std::vector<std::string>& argv) {
+    const int argc = static_cast<int>(argv.size());
     Args a;
     auto eat = [&](int& i, const char* flag) -> std::string {
         if (i + 1 >= argc) {
@@ -301,8 +303,8 @@ SampleResult process_one_sample(
 {
     SampleResult r;
 
-    fdb_bench::WavData wav;
-    if (!fdb_bench::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+    speech_core::WavData wav;
+    if (!speech_core::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
         r.error = "load_wav_mono_pcm16 failed: " + s.input_wav_path;
         return r;
     }
@@ -417,11 +419,10 @@ SampleResult process_one_sample(
     auto float_audio = PCMCodec::pcm16_to_float(
         tts_pcm16.data(), tts_pcm16.size());
     int out_rate = tts.output_sample_rate();
-    fs::create_directories(out_dir);
+    fs::create_directories(fs::u8path(out_dir));
     std::string wav_out = out_dir + "/" + s.category_dir_name +
                           "__" + s.sample_id + ".wav";
-    fdb_bench::write_wav_mono_pcm16(wav_out, float_audio.data(),
-                                    float_audio.size(), out_rate);
+    speech_core::write_wav_mono_pcm16(wav_out, float_audio, out_rate);
 
     r.output_sample_rate = out_rate;
     r.output_duration_sec = out_rate > 0
@@ -446,7 +447,7 @@ void write_sample_json(const std::string& path,
                        const std::string& llm_model,
                        double input_duration_sec)
 {
-    std::ofstream os(path);
+    std::ofstream os(fs::u8path(path));
     os << "{\n"
        << "  \"sample_id\": \""        << json_escape(s.sample_id) << "\",\n"
        << "  \"category\": \""         << json_escape(fdb_bench::FdbCorpus::category_name(s.category)) << "\",\n"
@@ -481,7 +482,7 @@ void write_sample_json(const std::string& path,
 int main(int argc, char** argv) {
     Args args;
     try {
-        args = parse_args(argc, argv);
+        args = parse_args(speech_examples::utf8_args(argc, argv));
         validate(args);
     } catch (const std::exception& ex) {
         std::fprintf(stderr, "fdb_bench: %s\n\n", ex.what());
@@ -547,7 +548,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    fs::create_directories(args.out_dir);
+    fs::create_directories(fs::u8path(args.out_dir));
 
     size_t ok = 0, err = 0;
     long long sum_ttft = 0;
@@ -556,12 +557,10 @@ int main(int argc, char** argv) {
         // Reload input WAV briefly just for duration recording. The
         // process_one_sample call below loads it again — small cost, keeps
         // the helper's signature minimal.
-        fdb_bench::WavData wav;
+        speech_core::WavData wav;
         double in_dur = 0.0;
-        if (fdb_bench::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
-            in_dur = wav.sample_rate > 0
-                ? static_cast<double>(wav.samples.size()) / wav.sample_rate
-                : 0.0;
+        if (speech_core::load_wav_mono_pcm16(s.input_wav_path, &wav)) {
+            in_dur = wav.duration();
         }
 
         SampleResult r;
