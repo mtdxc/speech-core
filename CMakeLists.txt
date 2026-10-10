@@ -722,7 +722,8 @@ if(SPEECH_CORE_BUILD_TESTS)
     endforeach()
 
     # Compile the real transcription CLI against a recording C ABI stub so
-    # native-rate WAV input and downmixing stay covered without model files.
+    # native-rate WAV input, downmixing, and OS UTF-8 argv stay covered without
+    # model files. The test launches child processes running this entry point.
     if(TARGET test_transcribe_cli)
         add_library(test_transcribe_cli_entry OBJECT examples/linux/tools/transcribe.cpp)
         target_link_libraries(test_transcribe_cli_entry PRIVATE speech_core)

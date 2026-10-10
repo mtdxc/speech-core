@@ -1,5 +1,6 @@
 #include "speech_core/models/onnx_pocket_tts.h"
 #include "speech_core/audio/wav_io.h"
+#include "../common/utf8_args.h"
 
 #include <algorithm>
 #include <chrono>
@@ -81,20 +82,22 @@ Run generate(speech_core::OnnxPocketTts& tts,
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 2) {
         std::fprintf(stderr,
             "Usage: %s BUNDLE [TEXT] [THREADS] [STEPS] [WARMUP] [RUNS] [OUTPUT_WAV]\n",
-            argv[0]);
+            args.empty() ? "speech_pocket_tts_bench" : args[0].c_str());
         return 2;
     }
 
-    const std::string bundle = argv[1];
-    const std::string text = argc > 2 ? argv[2] : "Hello world.";
-    const int threads = argc > 3 ? std::atoi(argv[3]) : 2;
-    const int steps = argc > 4 ? std::atoi(argv[4]) : 4;
-    const int warmup = argc > 5 ? std::atoi(argv[5]) : 1;
-    const int run_count = argc > 6 ? std::atoi(argv[6]) : 10;
-    const std::string output_wav = argc > 7 ? argv[7] : "";
+    const std::string bundle = args[1];
+    const std::string text = argc > 2 ? args[2] : "Hello world.";
+    const int threads = argc > 3 ? std::atoi(args[3].c_str()) : 2;
+    const int steps = argc > 4 ? std::atoi(args[4].c_str()) : 4;
+    const int warmup = argc > 5 ? std::atoi(args[5].c_str()) : 1;
+    const int run_count = argc > 6 ? std::atoi(args[6].c_str()) : 10;
+    const std::string output_wav = argc > 7 ? args[7] : "";
     if (threads < 1 || steps < 1 || warmup < 0 || run_count < 1) return 2;
 
     try {

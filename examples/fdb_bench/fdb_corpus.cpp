@@ -73,11 +73,11 @@ std::vector<FdbSample> FdbCorpus::load(const FdbCorpusOptions& opts) {
     std::vector<FdbSample> out;
     std::error_code ec;
     if (opts.corpus_root.empty()) return out;
-    if (!fs::is_directory(opts.corpus_root, ec)) return out;
+    if (!fs::is_directory(fs::u8path(opts.corpus_root), ec)) return out;
 
     for (const auto& cd : kCategories) {
         if (opts.category && *opts.category != cd.category) continue;
-        fs::path category_dir = fs::path(opts.corpus_root) / cd.dir_name;
+        fs::path category_dir = fs::u8path(opts.corpus_root) / cd.dir_name;
         if (!fs::is_directory(category_dir, ec)) continue;
 
         std::vector<FdbSample> bucket;
@@ -94,7 +94,7 @@ std::vector<FdbSample> FdbCorpus::load(const FdbCorpusOptions& opts) {
         for (auto& entry : fs::directory_iterator(category_dir, ec)) {
             if (ec) break;
             if (!entry.is_directory()) continue;
-            std::string sid = entry.path().filename().string();
+            std::string sid = entry.path().filename().u8string();
             if (!is_numeric_id(sid)) continue;
 
             fs::path sd = entry.path();
@@ -102,7 +102,7 @@ std::vector<FdbSample> FdbCorpus::load(const FdbCorpusOptions& opts) {
             if (!fs::is_regular_file(wav, file_ec)) {
                 std::fprintf(stderr,
                     "fdb_corpus: missing input.wav under %s\n",
-                    sd.string().c_str());
+                    sd.u8string().c_str());
                 continue;
             }
 
@@ -110,17 +110,17 @@ std::vector<FdbSample> FdbCorpus::load(const FdbCorpusOptions& opts) {
             s.category          = cd.category;
             s.category_dir_name = cd.dir_name;
             s.sample_id         = sid;
-            s.sample_dir        = sd.string();
-            s.input_wav_path    = wav.string();
+            s.sample_dir        = sd.u8string();
+            s.input_wav_path    = wav.u8string();
             if (cd.annotation && cd.annotation[0]) {
                 fs::path ann = sd / cd.annotation;
                 if (fs::is_regular_file(ann, file_ec)) {
-                    s.annotation_path = ann.string();
+                    s.annotation_path = ann.u8string();
                 }
             }
             fs::path tr = sd / "transcription.json";
             if (fs::is_regular_file(tr, file_ec)) {
-                s.transcription_path = tr.string();
+                s.transcription_path = tr.u8string();
             }
             bucket.push_back(std::move(s));
         }
@@ -142,7 +142,7 @@ std::vector<FdbSample> FdbCorpus::load(const FdbCorpusOptions& opts) {
 std::string FdbCorpus::extract_ground_truth_transcript(
     const std::string& transcription_json_path)
 {
-    std::ifstream is(transcription_json_path, std::ios::binary);
+    std::ifstream is(fs::u8path(transcription_json_path), std::ios::binary);
     if (!is) return "";
     std::stringstream ss; ss << is.rdbuf();
     std::string blob = ss.str();

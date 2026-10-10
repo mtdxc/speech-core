@@ -14,6 +14,7 @@
 #include <speech_core/audio/wav_io.h>
 
 #include "../../common/default_model_dir.h"
+#include "../../common/utf8_args.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -26,29 +27,32 @@
 constexpr int kSampleRate = 24000;
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
+    const char* argv0 = args.empty() ? "speech_synthesize" : args[0].c_str();
     if (argc < 3) {
         std::fprintf(stderr,
             "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n"
             "  model_dir : directory holding kokoro-e2e.onnx + voices/*.bin\n"
             "              (default: $SPEECH_MODEL_DIR, else %s)\n"
             "  language  : BCP-47 tag (default: en). Auto-switches voice.\n",
-            argv[0], speech_example_model_dir().c_str());
+            argv0, speech_example_model_dir().c_str());
         return 2;
     }
     // model_dir is optional. Old form: <model_dir> <out.wav> <text> [lang];
     // new form drops model_dir. With 4 args, both parses are plausible —
-    // disambiguate by whether argv[1] is an existing directory.
+    // disambiguate by whether args[1] is an existing directory.
     const bool has_dir = (argc >= 5)
-        || (argc == 4 && std::filesystem::is_directory(argv[1]));
+        || (argc == 4 && std::filesystem::is_directory(std::filesystem::u8path(args[1])));
     const int base = has_dir ? 2 : 1;
     if (argc < base + 2) {
-        std::fprintf(stderr, "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s [model_dir] <output.wav> \"<text>\" [language]\n", argv0);
         return 2;
     }
-    const std::string model_dir = has_dir ? argv[1] : speech_example_model_dir();
-    const std::string out_wav   = argv[base];
-    const std::string text      = argv[base + 1];
-    const std::string language  = (argc >= base + 3) ? argv[base + 2] : "en";
+    const std::string model_dir = has_dir ? args[1] : speech_example_model_dir();
+    const std::string out_wav   = args[base];
+    const std::string text      = args[base + 1];
+    const std::string language  = (argc >= base + 3) ? args[base + 2] : "en";
 
     speech_core::KokoroTts tts(model_dir + "/kokoro-e2e.onnx",
                                model_dir + "/voices",

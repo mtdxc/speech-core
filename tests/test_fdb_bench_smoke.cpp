@@ -184,10 +184,10 @@ void test_wav_io_roundtrip() {
         in[i] = 0.25f * std::sin(2.0f * 3.14159265f * 220.0f * i / sr);
     }
     auto tmp = fs::temp_directory_path() / "fdb_smoke_roundtrip.wav";
-    bool wrote = speech_core::write_wav_mono_pcm16(tmp.string(), in, sr);
+    bool wrote = speech_core::write_wav_mono_pcm16(tmp.u8string(), in, sr);
     if (!wrote) { std::fprintf(stderr, "write failed\n"); std::abort(); }
     speech_core::WavData out;
-    bool loaded = speech_core::load_wav_mono_pcm16(tmp.string(), &out);
+    bool loaded = speech_core::load_wav_mono_pcm16(tmp.u8string(), &out);
     if (!loaded || out.sample_rate != sr ||
         static_cast<int>(out.samples.size()) < n - 1 ||
         static_cast<int>(out.samples.size()) > n + 1) {
@@ -250,8 +250,8 @@ void test_corpus_iterator_against_fdb_mini() {
 // annotation) with 3 samples, and assert the iterator returns all three.
 // If the bug regresses, only the first sample comes back.
 void test_corpus_iterator_resilient_to_missing_aux_files() {
-    auto root = fs::temp_directory_path() /
-                ("fdb_iter_regress_" + std::to_string(::getpid()));
+    auto root = fs::temp_directory_path() / fs::u8path(
+                std::string(u8"fdb_\u092e\u0947\u0930\u093e-\u00e4udio_") + std::to_string(::getpid()));
     fs::create_directories(root);
     // FdbCorpus iterates a fixed list of category dirs — reuse one that
     // ships without an annotation file in the real corpus.
@@ -265,12 +265,12 @@ void test_corpus_iterator_resilient_to_missing_aux_files() {
         fs::path sd = cat / std::to_string(i);
         fs::create_directories(sd);
         std::vector<float> tone(16, 0.0f);
-        bool ok = speech_core::write_wav_mono_pcm16((sd / "input.wav").string(), tone, 16000);
+        bool ok = speech_core::write_wav_mono_pcm16((sd / "input.wav").u8string(), tone, 16000);
         assert(ok);
     }
 
     fdb_bench::FdbCorpusOptions opts;
-    opts.corpus_root = root.string();
+    opts.corpus_root = root.u8string();
     auto samples = fdb_bench::FdbCorpus::load(opts);
     assert(samples.size() == 3 &&
         "corpus iterator must not halt after the first sample whose "
@@ -279,6 +279,9 @@ void test_corpus_iterator_resilient_to_missing_aux_files() {
     for (const auto& s : samples) {
         assert(s.transcription_path.empty());
         assert(s.annotation_path.empty());
+        speech_core::WavData wav;
+        assert(speech_core::load_wav_mono_pcm16(s.input_wav_path, &wav));
+        assert(wav.sample_rate == 16000 && wav.samples.size() == 16);
     }
 
     std::error_code ec;
@@ -327,7 +330,7 @@ void test_wav_io_loads_ieee_float32() {
     }
 
     speech_core::WavData out;
-    bool loaded = speech_core::load_wav_mono_pcm16(tmp.string(), &out);
+    bool loaded = speech_core::load_wav_mono_pcm16(tmp.u8string(), &out);
     assert(loaded && "loader must accept IEEE Float 32-bit WAVs");
     assert(out.sample_rate == sr);
     assert(out.samples.size() == static_cast<size_t>(n));
@@ -476,9 +479,9 @@ void test_smoke_driver_with_mock_ollama() {
         // Write output.wav for this sample so we can verify the writer.
         auto float_audio = PCMCodec::pcm16_to_float(
             tts_pcm16.data(), tts_pcm16.size());
-        std::string wav_path = (out_dir / (s.sample_id + ".wav")).string();
+        std::string wav_path = (out_dir / (s.sample_id + ".wav")).u8string();
         assert(speech_core::write_wav_mono_pcm16(wav_path, float_audio, tts.output_sample_rate()));
-        assert(fs::file_size(wav_path) > 44);  // > header size
+        assert(fs::file_size(fs::u8path(wav_path)) > 44);  // > header size
     }
 
     // Every sample should have triggered exactly one Ollama request.
@@ -628,9 +631,9 @@ void test_real_models_integration() {
     fs::create_directories(out_dir);
     auto float_audio = PCMCodec::pcm16_to_float(
         tts_pcm16.data(), tts_pcm16.size());
-    std::string wav_out = (out_dir / "real_models_integration.wav").string();
+    std::string wav_out = (out_dir / "real_models_integration.wav").u8string();
     assert(speech_core::write_wav_mono_pcm16(wav_out, float_audio, tts.output_sample_rate()));
-    assert(fs::file_size(wav_out) > 44);
+    assert(fs::file_size(fs::u8path(wav_out)) > 44);
 
     std::error_code ec;
     fs::remove_all(out_dir, ec);

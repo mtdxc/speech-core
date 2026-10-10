@@ -15,6 +15,7 @@
 #include "speech_core/audio/wav_io.h"
 
 #include "../../common/default_model_dir.h"
+#include "../../common/utf8_args.h"
 
 #include <algorithm>
 #include <atomic>
@@ -78,17 +79,20 @@ static void on_event(const speech_event_t* event, void* ctx) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc != 2 && argc != 3) {
         std::fprintf(stderr,
             "usage: %s [model_dir] <input.wav>\n"
             "  model_dir : directory holding parakeet-* + silero-vad.onnx\n"
             "              (default: $SPEECH_MODEL_DIR, else %s)\n"
             "  input.wav : audio to transcribe (mono or stereo, 16-bit/24-bit/32-bit PCM or float32)\n",
-            argv[0], speech_example_model_dir().c_str());
+            args.empty() ? "speech_transcribe" : args[0].c_str(),
+            speech_example_model_dir().c_str());
         return 2;
     }
-    const std::string model_dir = (argc == 3) ? argv[1] : speech_example_model_dir();
-    const std::string wav_path  = (argc == 3) ? argv[2] : argv[1];
+    const std::string model_dir = (argc == 3) ? args[1] : speech_example_model_dir();
+    const std::string wav_path  = (argc == 3) ? args[2] : args[1];
 
     speech_core::WavData wav;
     if (!speech_core::load_wav_mono_pcm16(wav_path, &wav)) {

@@ -7,6 +7,7 @@
 
 #include "speech_core/supertonic_c.h"
 #include "speech_core/audio/wav_io.h"
+#include "../common/utf8_args.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -27,15 +28,18 @@ void on_chunk(const float* samples, size_t length, bool is_final, void* /*user*/
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 2) {
-        std::fprintf(stderr, "usage: %s <bundle_dir> [text] [lang] [voice] [out.wav]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <bundle_dir> [text] [lang] [voice] [out.wav]\n",
+                     args.empty() ? "supertonic_tts" : args[0].c_str());
         return 2;
     }
-    const char* bundle = argv[1];
-    const char* text   = argc > 2 ? argv[2] : "Hello from soniqo dot audio.";
-    const char* lang   = argc > 3 ? argv[3] : "en";
-    const char* voice  = argc > 4 ? argv[4] : "F1";
-    const std::string out = argc > 5 ? argv[5] : "supertonic_out.wav";
+    const char* bundle = args[1].c_str();
+    const char* text   = argc > 2 ? args[2].c_str() : "Hello from soniqo dot audio.";
+    const char* lang   = argc > 3 ? args[3].c_str() : "en";
+    const char* voice  = argc > 4 ? args[4].c_str() : "F1";
+    const std::string out = argc > 5 ? args[5] : "supertonic_out.wav";
 
     sc_supertonic_t s = sc_supertonic_create(bundle);
     if (!s) {

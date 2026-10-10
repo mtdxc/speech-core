@@ -18,6 +18,8 @@
 
 namespace fdb_bench {
 
+// All filesystem path strings in this interface are UTF-8.
+
 enum class FdbCategory {
     CandorPauseHandling,
     SyntheticPauseHandling,

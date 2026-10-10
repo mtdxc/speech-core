@@ -1,5 +1,6 @@
 #include "speech_core/audio/resampler.h"
 #include "speech_core/audio/wav_io.h"
+#include "../common/utf8_args.h"
 #include "speech_core/models/onnx_nemotron_streaming_stt.h"
 #include "speech_core/models/onnx_pocket_tts.h"
 
@@ -76,7 +77,7 @@ std::vector<std::string> split(const std::string& text, char delimiter) {
 }
 
 std::vector<TestCase> read_corpus(const std::string& path) {
-    std::ifstream stream(path);
+    std::ifstream stream(std::filesystem::u8path(path));
     if (!stream) throw std::runtime_error("Cannot open round-trip corpus: " + path);
 
     std::vector<TestCase> cases;
@@ -272,7 +273,7 @@ void write_report(const std::string& path,
                   double stt_load_ms,
                   bool passed) {
     if (path.empty()) return;
-    std::ofstream stream(path);
+    std::ofstream stream(std::filesystem::u8path(path));
     if (!stream) throw std::runtime_error("Cannot write JSON report: " + path);
     stream << std::fixed << std::setprecision(6);
     stream << "{\n  \"format_version\": 1,\n"
@@ -324,22 +325,24 @@ void write_report(const std::string& path,
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 4) {
         std::fprintf(stderr,
             "Usage: %s POCKET_BUNDLE STT_BUNDLE CORPUS_TSV [THREADS] [STEPS] "
             "[SEED] [REPORT_JSON] [FAILED_WAV_DIR]\n",
-            argv[0]);
+            args.empty() ? "speech_pocket_tts_roundtrip" : args[0].c_str());
         return 2;
     }
 
-    const std::string pocket_bundle = argv[1];
-    const std::string stt_bundle = argv[2];
-    const std::string corpus_path = argv[3];
-    const int threads = argc > 4 ? std::atoi(argv[4]) : 2;
-    const int steps = argc > 5 ? std::atoi(argv[5]) : 4;
-    const int seed = argc > 6 ? std::atoi(argv[6]) : 42;
-    const std::string report_path = argc > 7 ? argv[7] : "";
-    const std::string failed_wav_dir = argc > 8 ? argv[8] : "";
+    const std::string pocket_bundle = args[1];
+    const std::string stt_bundle = args[2];
+    const std::string corpus_path = args[3];
+    const int threads = argc > 4 ? std::atoi(args[4].c_str()) : 2;
+    const int steps = argc > 5 ? std::atoi(args[5].c_str()) : 4;
+    const int seed = argc > 6 ? std::atoi(args[6].c_str()) : 42;
+    const std::string report_path = argc > 7 ? args[7] : "";
+    const std::string failed_wav_dir = argc > 8 ? args[8] : "";
     const char* write_all_value =
         std::getenv("SPEECH_POCKET_TTS_ROUNDTRIP_WRITE_ALL");
     const bool write_all_wavs =

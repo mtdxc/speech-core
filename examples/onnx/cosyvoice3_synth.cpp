@@ -10,9 +10,11 @@
 
 #include <speech_core/models/onnx_cosyvoice3_tts.h>
 #include <speech_core/audio/wav_io.h>
+#include "../common/utf8_args.h"
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -20,7 +22,7 @@
 namespace {
 
 std::vector<uint8_t> read_file(const std::string& path) {
-    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    std::ifstream f(std::filesystem::u8path(path), std::ios::binary | std::ios::ate);
     if (!f.good()) throw std::runtime_error("cannot read " + path);
     const std::streamsize n = f.tellg();
     f.seekg(0);
@@ -34,18 +36,20 @@ std::vector<uint8_t> read_file(const std::string& path) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    const auto args = speech_examples::utf8_args(argc, argv);
+    argc = static_cast<int>(args.size());
     if (argc < 6) {
         std::fprintf(stderr,
             "usage: %s <bundle_dir> <conditioning.blob> <transcript> <text> <out.wav> [seed]\n",
-            argv[0]);
+            args.empty() ? "speech_cosyvoice3_synth_onnx" : args[0].c_str());
         return 2;
     }
-    const std::string bundle_dir = argv[1];
-    const std::string blob_path = argv[2];
-    const std::string transcript = argv[3];
-    const std::string text = argv[4];
-    const std::string out_path = argv[5];
-    const uint32_t seed = argc > 6 ? static_cast<uint32_t>(std::stoul(argv[6])) : 7u;
+    const std::string bundle_dir = args[1];
+    const std::string blob_path = args[2];
+    const std::string transcript = args[3];
+    const std::string text = args[4];
+    const std::string out_path = args[5];
+    const uint32_t seed = argc > 6 ? static_cast<uint32_t>(std::stoul(args[6])) : 7u;
 
     speech_core::OnnxCosyVoice3Tts tts(bundle_dir, /*hw_accel=*/false);
 
