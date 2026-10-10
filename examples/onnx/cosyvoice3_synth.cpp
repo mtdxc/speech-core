@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
         pcm.insert(pcm.end(), data, data + n);
     });
 
-    speech_core::write_wav_mono_pcm16(out_path, pcm, tts.output_sample_rate());
+    speech_core::WavData::write_mono(out_path, pcm, tts.output_sample_rate());
     std::printf("tokens=%d stop=%d prefill=%lldms ar=%lldms decode=%lldms samples=%zu -> %s\n",
                 tts.tokens_generated(), tts.stopped_on_stop_token() ? 1 : 0,
                 static_cast<long long>(tts.prefill_ms()),

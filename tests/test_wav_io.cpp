@@ -11,8 +11,6 @@
 #include <cstdio>
 
 using speech_core::WavData;
-using speech_core::load_wav_mono_pcm16;
-using speech_core::write_wav_mono_pcm16;
 
 namespace {
 
@@ -22,7 +20,7 @@ void check_decode(const std::filesystem::path& path, uint16_t format, uint16_t b
     // The odd-sized JUNK chunk also makes float payloads only two-byte aligned.
     wav_test::write_fixture(path, format, bits, channels, 48000, samples, true);
     WavData wav;
-    assert(load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(wav.load_mono(path));
     assert(wav.sample_rate == 48000);
     assert(wav.samples.size() == expected.size());
     assert(std::fabs(wav.duration() - static_cast<double>(expected.size()) / 48000) < 1e-12);
@@ -49,9 +47,9 @@ void test_formats_and_downmix(const std::filesystem::path& path) {
 void test_utf8_write_and_read(const std::filesystem::path& directory) {
     const auto path = directory / std::filesystem::u8path(u8"\u092e\u0947\u0930\u093e-\u00e4udio.wav");
     const WavData input{{-2, -0.5f, 0, 0.5f, 2}, 24000};
-    assert(write_wav_mono_pcm16(path.u8string(), input));
+    assert(input.save(path));
     WavData output;
-    assert(load_wav_mono_pcm16(path.u8string(), &output));
+    assert(output.load_mono(path));
     assert(output.sample_rate == input.sample_rate);
     assert(output.samples.size() == input.samples.size());
     for (size_t i = 0; i < input.samples.size(); ++i) {
@@ -59,25 +57,24 @@ void test_utf8_write_and_read(const std::filesystem::path& directory) {
         assert(std::fabs(output.samples[i] - clipped) < 2.0f / 32768);
     }
     const auto missing_parent = directory / "missing" / "out.wav";
-    assert(!write_wav_mono_pcm16(missing_parent.u8string(), input));
+    assert(!input.save(missing_parent));
 }
 
 void test_invalid_input(const std::filesystem::path& path) {
     WavData wav{{1}, 16000};
-    assert(!load_wav_mono_pcm16((path.u8string() + ".missing"), &wav));
+    assert(!wav.load_mono((path.u8string() + ".missing")));
     assert(wav.samples.empty() && wav.sample_rate == 0);
-    assert(!load_wav_mono_pcm16(path.u8string(), nullptr));
 
     wav_test::write_fixture(path, 1, 8, 1, 16000, {128});
-    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(!wav.load_mono(path));
     wav_test::write_fixture(path, 1, 16, 1, 0, {0});
-    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(!wav.load_mono(path));
     wav_test::write_fixture(path, 1, 16, 2, 16000, {0, 0, 0});
-    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(!wav.load_mono(path));
 
     wav_test::write_fixture(path, 1, 16, 1, 16000, {0, 1});
     std::filesystem::resize_file(path, std::filesystem::file_size(path) - 2);
-    assert(!load_wav_mono_pcm16(path.u8string(), &wav));
+    assert(!wav.load_mono(path));
     assert(wav.samples.empty() && wav.sample_rate == 0);
 }
 

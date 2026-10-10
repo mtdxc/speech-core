@@ -433,7 +433,7 @@ int main(int argc, char** argv) {
                 char name[64];
                 std::snprintf(name, sizeof(name), "case_%02zu.wav", index + 1);
                 const auto path = std::filesystem::u8path(failed_wav_dir) / name;
-                if (!speech_core::write_wav_mono_pcm16(path.u8string(), audio_24k, 24000)) {
+                if (!speech_core::WavData::write_mono(path.u8string(), audio_24k, 24000)) {
                     throw std::runtime_error("Cannot write WAV: " + path.u8string());
                 }
             }

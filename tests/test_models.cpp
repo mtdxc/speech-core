@@ -195,7 +195,7 @@ void test_silero_vad(const std::string& dir) {
 void test_silero_vad_real_speech(const std::string& dir) {
     std::string model = dir + "/silero-vad.onnx";
     speech_core::WavData wav;
-    speech_core::load_wav_mono_pcm16(test_audio_path(), &wav);
+    wav.load_mono(test_audio_path());
     if (!file_exists(model)) {
         std::printf("  [skip] silero-vad.onnx not in %s\n", dir.c_str());
         return;

@@ -2,7 +2,6 @@
 
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iterator>
 #include <vector>
 
@@ -44,12 +43,12 @@ float decode_sample(const uint8_t* p, int audio_format, int bits_per_sample) {
                               static_cast<double>(int64_t{1} << (bits_per_sample - 1)));
 }
 
-void write_u16_le(std::ofstream& os, uint16_t v) {
+void write_u16_le(std::ostream& os, uint16_t v) {
     char buf[2] = {static_cast<char>(v & 0xff),
                    static_cast<char>((v >> 8) & 0xff)};
     os.write(buf, 2);
 }
-void write_u32_le(std::ofstream& os, uint32_t v) {
+void write_u32_le(std::ostream& os, uint32_t v) {
     char buf[4] = {static_cast<char>(v & 0xff),
                    static_cast<char>((v >> 8) & 0xff),
                    static_cast<char>((v >> 16) & 0xff),
@@ -59,12 +58,8 @@ void write_u32_le(std::ofstream& os, uint32_t v) {
 
 }  // namespace
 
-bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
-    if (!out) return false;
-    out->samples.clear();
-    out->sample_rate = 0;
-
-    std::ifstream is(std::filesystem::u8path(path), std::ios::binary);
+bool WavData::load_mono(std::istream& is) {
+    this->clear();
     if (!is) return false;
 
     // Keep the file buffer alive while walking and decoding its chunks.
@@ -116,8 +111,8 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
     if (pcm_bytes < bytes_per_frame || pcm_bytes % bytes_per_frame != 0) return false;
     const size_t num_frames = pcm_bytes / bytes_per_frame;
 
-    out->samples.resize(num_frames);
-    out->sample_rate = sample_rate;
+    this->samples.resize(num_frames);
+    this->sample_rate = sample_rate;
 
     for (size_t i = 0; i < num_frames; ++i) {
         double sum = 0.0;
@@ -126,35 +121,16 @@ bool load_wav_mono_pcm16(const std::string& path, WavData* out) {
                 (i * static_cast<size_t>(channels) + static_cast<size_t>(c)) * bytes_per_sample;
             sum += decode_sample(sample, audio_format, bits_per_sample);
         }
-        out->samples[i] = static_cast<float>(sum / channels);
+        this->samples[i] = static_cast<float>(sum / channels);
     }
     return true;
 }
 
-bool write_wav_mono_pcm16(const std::string& path, const WavData& data) {
-    return write_wav_mono_pcm16(
-        path, data.samples.data(), data.samples.size(), data.sample_rate);
-}
-
-bool write_wav_mono_pcm16(const std::string& path,
-                          const std::vector<float>& data, int sample_rate) {
-    return write_wav_mono_pcm16(path, data.data(), data.size(), sample_rate);
-}
-
-bool WavData::load(const std::string& path) {
-    return load_wav_mono_pcm16(path, this);
-}
-
-bool WavData::save(const std::string& path) const {
-    return write_wav_mono_pcm16(path, *this);
-}
-
-bool write_wav_mono_pcm16(const std::string& path,
+bool WavData::write_mono(std::ostream& os,
                           const float* samples, size_t count,
                           int sample_rate) {
     if (!samples || sample_rate <= 0) return false;
 
-    std::ofstream os(std::filesystem::u8path(path), std::ios::binary);
     if (!os) return false;
 
     const uint32_t data_bytes = static_cast<uint32_t>(count * 2);

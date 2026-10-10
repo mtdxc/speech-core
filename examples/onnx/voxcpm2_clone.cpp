@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
     const bool no_ref = (ref_wav == "none");
     speech_core::WavData in;
     if (!no_ref) {
-        if (!speech_core::load_wav_mono_pcm16(ref_wav, &in)) {
+        if (!in.load_mono(ref_wav)) {
             std::fprintf(stderr, "could not read reference WAV: %s\n", ref_wav.c_str());
             return 1;
         }
@@ -104,7 +104,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "synthesis produced no audio\n");
             return 1;
         }
-        if (!speech_core::write_wav_mono_pcm16(out_wav, audio, kOutSampleRate)) {
+        if (!speech_core::WavData::write_mono(out_wav, audio, kOutSampleRate)) {
             std::fprintf(stderr, "could not write %s\n", out_wav.c_str());
             return 1;
         }

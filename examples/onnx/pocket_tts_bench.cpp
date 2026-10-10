@@ -134,7 +134,7 @@ int main(int argc, char** argv) {
         const long rss_kib = read_status_kib("VmRSS:");
         const long peak_kib = read_status_kib("VmHWM:");
         if (!output_wav.empty() &&
-            !speech_core::write_wav_mono_pcm16(output_wav, captured_audio, 24000)) {
+            !speech_core::WavData::write_mono(output_wav, captured_audio, 24000)) {
             throw std::runtime_error("Cannot write WAV output: " + output_wav);
         }
         std::printf("Pocket TTS speech-core interleaved benchmark\n");

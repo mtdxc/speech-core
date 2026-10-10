@@ -61,7 +61,7 @@ int main(int argc, char** argv) {
     const int sr = sc_supertonic_output_sample_rate(s);
     std::printf("OK: %zu samples @ %d Hz = %.2fs\n", g_pcm.size(), sr,
                 static_cast<double>(g_pcm.size()) / sr);
-    speech_core::write_wav_mono_pcm16(out, g_pcm, sr);
+    speech_core::WavData::write_mono(out, g_pcm, sr);
     std::printf("wrote %s\n", out.c_str());
     sc_supertonic_destroy(s);
     return 0;
