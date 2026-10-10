@@ -67,6 +67,8 @@ add_library(speech_core
     src/audio/stft.cpp
     src/audio/seamless_fbank.cpp
     src/audio/wespeaker_fbank.cpp
+    src/audio/kws_fbank.cpp
+    src/models/kws/kws_decoder.cpp
     src/models/kokoro/kokoro_phonemizer.cpp
     src/models/kokoro/kokoro_multilingual.cpp
     src/models/moss/moss_prompt_processor.cpp
@@ -169,6 +171,7 @@ if(SPEECH_CORE_WITH_ONNX)
         src/models/redimnet/onnx_redimnet_speaker_embedding.cpp
         src/models/wespeaker/onnx_wespeaker_embedding.cpp
         src/models/smartturn/onnx_smart_turn.cpp
+        src/models/kws/onnx_zipformer_kws.cpp
     )
     # VoxCPM2 tokenizer is pure C++17 and shared with the LiteRT target. To
     # avoid duplicate symbols when a downstream binary links both targets, we
@@ -700,6 +703,7 @@ if(SPEECH_CORE_BUILD_TESTS)
            OR TEST_NAME STREQUAL "test_onnx_localvqe_model"
            OR TEST_NAME STREQUAL "test_onnx_redimnet_model"
            OR TEST_NAME STREQUAL "test_onnx_sortformer_model"
+           OR TEST_NAME STREQUAL "test_onnx_kws_model"
            OR TEST_NAME STREQUAL "test_onnx_smart_turn_model"
            OR TEST_NAME STREQUAL "test_redimnet_audio_preparation"
            OR TEST_NAME STREQUAL "test_litert_functiongemma_llm"
@@ -869,6 +873,14 @@ if(SPEECH_CORE_BUILD_TESTS)
             PRIVATE speech_core_models)
         add_test(NAME test_onnx_redimnet_model
                  COMMAND test_onnx_redimnet_model)
+    endif()
+
+    if(SPEECH_CORE_WITH_ONNX)
+        add_executable(test_onnx_kws_model tests/test_onnx_kws_model.cpp)
+        target_include_directories(test_onnx_kws_model PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
+        target_link_libraries(test_onnx_kws_model PRIVATE speech_core_models)
+        add_test(NAME test_onnx_kws_model COMMAND test_onnx_kws_model)
+        set_tests_properties(test_onnx_kws_model PROPERTIES SKIP_RETURN_CODE 77)
     endif()
 
     if(SPEECH_CORE_WITH_ONNX AND

@@ -1,0 +1,1 @@
+Synthetic 16 kHz mono fbank fixture from SoniqoWakeWord tests. input.f32 is normalized little-endian Float32 PCM from fbank_input.wav; reference.bin contains two little-endian Int32 dimensions followed by Float32 log-mel values from the Kaldi reference. This pins the existing iPhone frontend, not speaker or command accuracy.
