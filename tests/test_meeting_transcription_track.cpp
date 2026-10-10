@@ -487,8 +487,8 @@ void test_short_microphone_agreement_preserves_languages() {
                     && !event.blocks.empty();
             });
     };
-    assert(run("ПРИВЕТ", "Привет!"));
-    assert(run("你好", "你好。"));
+    assert(run(u8"ПРИВЕТ", u8"Привет!"));
+    assert(run(u8"你好", u8"你好。"));
 }
 
 void test_numeric_moss_wire_marker_is_never_published() {
